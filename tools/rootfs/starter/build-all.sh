@@ -23,7 +23,7 @@ DEBIAN_MIRROR=http://deb.debian.org/debian
 # provides. --exclude cannot drop it, because the dependency pulls it back.
 ARMHF_INCLUDE=systemd-sysv,systemd-resolved,udev,kmod,dbus,ca-certificates,libbpf1
 DEFAULT_PRODUCTS="boot-base-aarch64 boot-base-x86_64 alpine debian-13-minimal debian-13-plasma-wayland"
-KNOWN_PRODUCTS="$DEFAULT_PRODUCTS debian-13-minimal-armhf debian-13-phosh"
+KNOWN_PRODUCTS="$DEFAULT_PRODUCTS debian-13-minimal-armhf debian-13-phosh debian-base"
 
 fail()
 {
@@ -35,7 +35,7 @@ usage()
 {
 	cat <<'EOF'
 Usage: tools/rootfs/starter/build-all.sh --work PATH --output PATH [--jobs N]
-       [--product NAME]...
+       [--product NAME]... [--debian-base PATH]
 
 Run as an ordinary user with passwordless sudo on native arm64 Linux. PATHs
 must be absolute and distinct outside the source tree. The output path must
@@ -44,7 +44,7 @@ not exist; the completed release directory is published atomically.
 --product builds only the named products, each at most once; by default the
 release holds the five DEFAULT_PRODUCTS. armhf and Phosh are opt-in:
   boot-base-aarch64 boot-base-x86_64 alpine debian-13-minimal
-  debian-13-plasma-wayland debian-13-minimal-armhf debian-13-phosh
+  debian-13-plasma-wayland debian-13-minimal-armhf debian-13-phosh debian-base
 
 debian-13-minimal-armhf runs ARM programs under qemu-arm (Debian's qemu-user)
 in private namespaces.
@@ -56,6 +56,7 @@ work_dir=
 output_dir=
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
 products=
+debian_base_archive=
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	--work)
@@ -66,6 +67,11 @@ while [ "$#" -gt 0 ]; do
 	--output)
 		[ "$#" -ge 2 ] || fail "--output requires a path"
 		output_dir=$2
+		shift 2
+		;;
+	--debian-base)
+		[ "$#" -ge 2 ] || fail "--debian-base requires a verified archive"
+		debian_base_archive=$2
 		shift 2
 		;;
 	--jobs)
@@ -394,247 +400,9 @@ build_alpine()
 	cp "$work_dir/alpine.packages.tsv" "$destination.packages.tsv"
 }
 
-# Everything an image's package set needs before its packages are installed.
-prepare_debian_base()
-{
-	root=$1
-	write_root_file "$root/etc/apt/sources.list" 0644 <<EOF
-deb http://deb.debian.org/debian $DEBIAN_SUITE main
-deb http://deb.debian.org/debian $DEBIAN_SUITE-updates main
-deb http://security.debian.org/debian-security $DEBIAN_SUITE-security main
-EOF
-	write_root_file "$root/usr/sbin/policy-rc.d" 0755 <<'EOF'
-#!/bin/sh
-exit 101
-EOF
-}
-
-install_debian_base()
-{
-	root=$1
-	as_root cp -L /etc/resolv.conf "$root/etc/resolv.conf"
-	as_root chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
-		apt-get update
-	# systemd loads libbpf at runtime for its cgroup BPF features and reports
-	# them disabled at every boot when the library is absent.
-	as_root chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
-		apt-get install -y --no-install-recommends \
-		systemd-sysv systemd-resolved udev kmod dbus ca-certificates \
-		libbpf1
-}
-
-# The image's own policy, written and enabled from the host: it executes
-# nothing from the root, so it serves every architecture alike.
-configure_debian_base()
-{
-	root=$1
-	hostname=$2
-	autologin_user=$3
-	write_root_file "$root/etc/hostname" 0644 <<EOF
-$hostname
-EOF
-	write_root_file "$root/etc/hosts" 0644 <<EOF
-127.0.0.1 localhost
-127.0.1.1 $hostname
-::1 localhost ip6-localhost ip6-loopback
-EOF
-	write_root_file "$root/etc/fstab" 0644 <<'EOF'
-/dev/ubda1 / ext4 defaults,noatime 0 1
-EOF
-	# Debian's systemd links /etc/default/locale to this file at boot, and
-	# pam_env reads it for every login. C.UTF-8 needs no locales package.
-	write_root_file "$root/etc/locale.conf" 0644 <<'EOF'
-LANG=C.UTF-8
-EOF
-	# Match wired links by type rather than by kernel-assigned name, and keep
-	# the image's own hostname: the DHCP-supplied one could only be applied
-	# through hostnamed, which refuses networkd without polkit.
-	write_root_file "$root/etc/systemd/network/20-wired.network" 0644 <<'EOF'
-[Match]
-Type=ether
-Kind=!*
-
-[Network]
-DHCP=yes
-IPv6AcceptRA=yes
-
-[DHCPv4]
-UseDNS=yes
-UseHostname=no
-
-[DHCPv6]
-UseHostname=no
-EOF
-	write_root_file \
-		"$root/etc/systemd/system/serial-getty@hvc0.service.d/autologin.conf" \
-		0644 <<EOF
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin $autologin_user --noclear - \$TERM
-EOF
-	as_root systemctl --root="$root" enable \
-		systemd-networkd.service systemd-resolved.service \
-		serial-getty@hvc0.service
-	as_root ln -sfn /run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
-}
-
-prune_debian()
-{
-	root=$1
-	as_root rm -f -- "$root/usr/sbin/policy-rc.d"
-	as_root rm -rf -- "$root/var/lib/apt/lists"/* "$root/var/cache/apt"/* \
-		"$root/tmp"/* "$root/var/tmp"/* "$root/run"/*
-	as_root find "$root/var/log" -type f -exec truncate -s 0 {} \;
-	as_root find "$root/usr/share/doc" -type f ! -name copyright -delete
-	as_root find "$root/usr/share/doc" -type l -delete
-	as_root find "$root/usr/share/doc" -depth -type d -empty -delete
-	as_root rm -rf -- "$root/usr/share/man"/* "$root/usr/share/info"/* \
-		"$root/usr/share/lintian" "$root/usr/share/doc-base"
-	as_root find "$root/usr/share/locale" -mindepth 1 -maxdepth 1 \
-		! -name 'en' ! -name 'en_*' -exec rm -rf -- {} +
-	producer_reset_machine_id "$root"
-}
-
-debootstrap_root()
-{
-	root=$1
-	reset_root_directory "$root"
-	as_root debootstrap --arch=arm64 --variant=minbase --components=main \
-		"$DEBIAN_SUITE" "$root" http://deb.debian.org/debian
-}
-
-
-# Kernarium's fd-backed UML console is ttyS0; CLI hosts may expose hvc0.
-# tty1 remains usable in console mode. A display manager owns it in GUI mode.
-configure_debian_local_console()
-{
-	root=$1
-	user=$2
-	for unit in serial-getty@ttyS0 serial-getty@hvc0 getty@tty1; do
-		write_root_file "$root/etc/systemd/system/$unit.service.d/autologin.conf" 0644 <<EOF
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin $user --noclear %I \$TERM
-EOF
-		as_root systemctl --root="$root" enable "$unit.service"
-	done
-}
-
-build_debian_minimal()
-{
-	printf '%s\n' "==> Building Debian 13 minimal GPT image"
-	root=$roots_dir/debian-minimal
-	debootstrap_root "$root"
-	mount_chroot_proc "$root"
-	prepare_debian_base "$root"
-	install_debian_base "$root"
-	configure_debian_base "$root" debian root
-	configure_debian_local_console "$root" root
-	as_root chroot "$root" /usr/bin/passwd -d root
-	as_root systemctl --root="$root" set-default multi-user.target
-	as_root chroot "$root" dpkg-query -W -f='${binary:Package}\t${Version}\n' | \
-		sort > "$work_dir/debian-minimal.packages.tsv"
-	unmount_chroot_proc
-	cat "$root/etc/debian_version" > "$work_dir/debian.version"
-	prune_debian "$root"
-	destination=$(artifact_path debian-13-minimal.img)
-	as_root python3 "$SCRIPT_DIR/make-gpt-image.py" \
-		--root "$root" --output "$destination" --label debian-min \
-		--headroom-mib 96
-	as_root chown "$owner_uid:$owner_gid" "$destination"
-	cp "$work_dir/debian-minimal.packages.tsv" "$destination.packages.tsv"
-}
-
-# The same writable root boots either target. greetd is wanted only by
-# graphical.target, so multi-user.target starts no compositor or desktop.
-build_debian_phosh()
-{
-	printf '%s\n' "==> Building Debian 13 Phosh GPT image"
-	root=$roots_dir/debian-phosh
-	debootstrap_root "$root"
-	mount_chroot_proc "$root"
-	prepare_debian_base "$root"
-	install_debian_base "$root"
-	as_root chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
-		apt-get install -y --no-install-recommends \
-		phosh phoc greetd foot dbus-user-session libpam-systemd \
-		gnome-session-bin gnome-session-common gnome-settings-daemon \
-		gnome-settings-daemon-common squeekboard \
-		libgl1-mesa-dri libegl-mesa0 sudo openssh-server procps
-	as_root test -x "$root/usr/bin/phosh-session"
-	as_root test -x "$root/usr/sbin/agreety"
-	as_root chroot "$root" useradd --create-home --uid 1000 --shell /bin/bash debian
-	# Unlock local initial-session/account checks without publishing a password.
-	as_root chroot "$root" passwd -d debian
-	for group in video render input audio; do
-		as_root chroot "$root" groupadd --force "$group"
-		as_root chroot "$root" usermod --append --groups "$group" debian
-	done
-	configure_debian_base "$root" debian debian
-	configure_debian_local_console "$root" debian
-	write_root_file "$root/etc/sudoers.d/debian" 0440 <<'EOF'
-debian ALL=(ALL:ALL) NOPASSWD: ALL
-EOF
-	# No shared password or SSH host identity is published. The local console
-	# autologin is the setup path; SSH accepts keys installed by the owner.
-	write_root_file "$root/etc/ssh/sshd_config.d/10-kernarium.conf" 0644 <<'EOF'
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitEmptyPasswords no
-PermitRootLogin prohibit-password
-EOF
-	as_root rm -f "$root/etc/ssh/ssh_host_"*
-	write_root_file "$root/etc/systemd/system/ssh-host-keys.service" 0644 <<'EOF'
-[Unit]
-Description=Generate this guest's SSH host keys
-Before=ssh.service
-ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/ssh-keygen -A
-[Install]
-WantedBy=multi-user.target
-EOF
-	write_root_file "$root/etc/greetd/config.toml" 0644 <<'EOF'
-[terminal]
-vt = 1
-[default_session]
-command = "/usr/sbin/agreety --cmd /usr/bin/phosh-session"
-user = "_greetd"
-[initial_session]
-command = "/usr/bin/phosh-session"
-user = "debian"
-EOF
-	write_root_file "$root/etc/systemd/system/greetd.service.d/console.conf" 0644 <<'EOF'
-[Unit]
-Conflicts=getty@tty1.service
-After=getty@tty1.service
-EOF
-	# Debian's package may enable greetd through a display-manager alias.
-	# Keep one explicit graphical dependency and none in multi-user.target.
-	as_root systemctl --root="$root" disable greetd.service || true
-	as_root rm -f "$root/etc/systemd/system/display-manager.service" \
-		"$root/etc/systemd/system/graphical.target.wants/phosh.service"
-	as_root mkdir -p "$root/etc/systemd/system/graphical.target.wants"
-	as_root ln -s /usr/lib/systemd/system/greetd.service \
-		"$root/etc/systemd/system/graphical.target.wants/greetd.service"
-	as_root systemctl --root="$root" enable ssh-host-keys.service ssh.service
-	as_root systemctl --root="$root" set-default graphical.target
-	as_root python3 "$SCRIPT_DIR/verify-phosh.py" --root "$root" \
-		--output "$output_dir/debian-13-phosh.audit.json"
-	as_root chroot "$root" runuser -u debian -- /bin/sh -ec 'test "$(id -u)" = 1000; sudo -n true'
-	as_root chroot "$root" dpkg-query -W -f='${binary:Package}\t${Version}\n' | \
-		sort > "$work_dir/debian-phosh.packages.tsv"
-	unmount_chroot_proc
-	cat "$root/etc/debian_version" > "$work_dir/debian.version"
-	prune_debian "$root"
-	destination=$(artifact_path debian-13-phosh.img)
-	as_root python3 "$SCRIPT_DIR/make-gpt-image.py" \
-		--root "$root" --output "$destination" --label debian-phosh \
-		--headroom-mib 1024
-	as_root chown "$owner_uid:$owner_gid" "$destination"
-	cp "$work_dir/debian-phosh.packages.tsv" "$destination.packages.tsv"
-}
+. "$SCRIPT_DIR/products/debian-base.sh"
+. "$SCRIPT_DIR/products/debian-minimal.sh"
+. "$SCRIPT_DIR/products/debian-phosh.sh"
 
 configure_plasma_user()
 {
@@ -876,6 +644,9 @@ fi
 if wants alpine; then
 	build_alpine
 fi
+if wants debian-base; then
+	build_debian_base
+fi
 if wants debian-13-minimal; then
 	build_debian_minimal
 fi
@@ -911,7 +682,7 @@ if wants alpine; then
 	set -- "$@" --alpine-version "$ALPINE_VERSION" \
 		--alpine-sha256 "$ALPINE_SHA256"
 fi
-if wants debian-13-minimal || wants debian-13-plasma-wayland || \
+if wants debian-base || wants debian-13-minimal || wants debian-13-plasma-wayland || \
 	wants debian-13-phosh || \
 	wants debian-13-minimal-armhf; then
 	set -- "$@" --debian-suite "$DEBIAN_SUITE" \

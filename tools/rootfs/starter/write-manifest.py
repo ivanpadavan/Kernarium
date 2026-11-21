@@ -28,7 +28,7 @@ DEBIAN_IMAGES = {
     "debian-13-plasma-wayland": "debian-13-plasma-wayland.img",
     "debian-13-minimal-armhf": "debian-13-minimal-armhf.img",
 }
-PRODUCTS = ("boot-base-aarch64", "boot-base-x86_64", "alpine",
+PRODUCTS = ("boot-base-aarch64", "boot-base-x86_64", "alpine", "debian-base",
             *DEBIAN_IMAGES)
 # What each row of the armhf image's package inventory records.
 ARMHF_INVENTORY_COLUMNS = ["package", "version", "architecture", "size",
@@ -93,6 +93,8 @@ def main() -> int:
     boot_bases = {BOOT_BASES[p][0]: BOOT_BASES[p][1]
                   for p in products if p in BOOT_BASES}
     artifacts: list[str] = [*boot_bases]
+    if "debian-base" in products:
+        artifacts += ["debian-13-base.tar.gz", "debian-13-base.packages.tsv"]
     sources: dict[str, object] = {}
     if boot_bases:
         require("buildroot_version", "buildroot_sha256", "busybox_version",
@@ -108,7 +110,7 @@ def main() -> int:
                              "sha256": arguments.alpine_sha256}
     debian = [DEBIAN_IMAGES[p] for p in products if p in DEBIAN_IMAGES]
     artifacts += debian
-    if debian:
+    if debian or "debian-base" in products:
         require("debian_suite", "debian_version")
         sources["debian"] = {"suite": arguments.debian_suite,
                              "version": arguments.debian_version}
