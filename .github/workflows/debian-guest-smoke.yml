@@ -231,6 +231,16 @@ jobs:
         CONTAINER=$(xcrun simctl get_app_container "$SIM_UDID" com.imxieyi.Kernarium data)
         mkdir -p "$CONTAINER/Documents"
         cp -c .build/ci-download/debian-13-phosh.img "$CONTAINER/Documents/debian-13-phosh.img"
+    - name: Preserve the built validation host before guest checks
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        python3 -B tools/ci/debian-artifacts.py record \
+          --root .build/simulator-derived/Build/Products --kind validation-host --key "$GITHUB_SHA"
+        tar -C .build/simulator-derived/Build -czf "$RUNNER_TEMP/debian-validation-host.tar.gz" Products
+        gh release create "debian-validation-host-$GITHUB_RUN_ID" --target "$GITHUB_SHA" --draft \
+          --title "Debian image validation host" --notes "Validation host built; guest qualification is running."
+        gh release upload "debian-validation-host-$GITHUB_RUN_ID" "$RUNNER_TEMP/debian-validation-host.tar.gz"
     - name: Boot Phosh and write data
       env:
         TEST_RUNNER_KERNARIUM_ROOTFS: debian-13-phosh.img
@@ -280,6 +290,26 @@ jobs:
         gh release view "$IMAGE_TAG" --json body --jq .body > "$RUNNER_TEMP/notes.md"
         printf '\n\nPhosh GUI process, console-mode process absence, write/read persistence and clean shutdown passed in the unsigned iOS Simulator. Hardware Metal/LiveContainer behavior still requires physical-device testing. [Smoke run](%s/%s/actions/runs/%s)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$RUNNER_TEMP/notes.md"
         gh release edit "$IMAGE_TAG" --notes-file "$RUNNER_TEMP/notes.md"
+    - name: Qualify the reusable image validation host
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        python3 - <<'PYTHON'
+        import hashlib, json, os
+        from pathlib import Path
+        root = Path(os.environ['RUNNER_TEMP'])
+        archive = root / 'debian-validation-host.tar.gz'
+        with archive.open('rb') as source:
+            digest = hashlib.file_digest(source, 'sha256').hexdigest()
+        qualification = dict(kind='validation-host', source_revision=os.environ['GITHUB_SHA'],
+                             archive_sha256=digest, run_id=os.environ['GITHUB_RUN_ID'],
+                             tests={phase: json.loads((root / (phase + '-summary.json')).read_text())
+                                    for phase in ('write', 'read')})
+        (root / 'qualification.json').write_text(json.dumps(qualification, indent=2) + '\n')
+        PYTHON
+        gh release upload "debian-validation-host-$GITHUB_RUN_ID" "$RUNNER_TEMP/qualification.json"
+        gh release edit "debian-validation-host-$GITHUB_RUN_ID" --draft=false --prerelease \
+          --notes "Real Phosh/console boots, serial login, persistence and clean shutdown passed. Prebuilt host for image validation; no IPA production lane is needed to test an image."
     - name: Upload simulator diagnostics
       if: always()
       uses: actions/upload-artifact@v4
