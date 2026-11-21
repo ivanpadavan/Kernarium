@@ -23,7 +23,7 @@ the serial console with no desktop processes. Both modes use the same writable
 root and the `debian` account with passwordless sudo. Password authentication
 for SSH is disabled and host keys are generated inside the guest on its first
 boot. Install your own authorized public key from the local console to use SSH.
-Set a personal password with `passwd` for the desktop lock screen.
+Set a personal password with `sudo passwd debian` for the desktop lock screen.
 
 `debian-13-minimal-armhf.img` is the opt-in 32-bit Arm twin of the minimal
 Debian image for AArch32 guests (see below).
