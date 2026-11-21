@@ -374,11 +374,6 @@ jobs:
               "is unverified.\n\n" + guide)
           PYTHON
           gh release edit "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --draft=false --prerelease --notes-file .build/release-notes.md
-      - name: Check host boot contracts
-        run: |
-          cmake --preset macos-unit
-          cmake --build --preset unit-test-binaries --parallel 3
-          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium-(loader-|settle-plumbing|console-)|kernarium-device-framework-|boot-initramfs|rootfs-boot-base|rootfs-starter|andarium-stage-system-image'
       - name: Bootstrap app container on the Mac
         run: |
           xcodebuild -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
@@ -416,6 +411,39 @@ jobs:
             --only-testing KernariumTests/PersistentDebianTests \
             --test-env KERNARIUM_DEBIAN_SMOKE=read \
             --test-env KERNARIUM_LINUX_CONSOLE_BOOT=1
+      - uses: actions/cache/restore@v4
+        id: macos-test-sources
+        with:
+          path: |
+            external/sources
+            .build/dependency-cache
+          key: macos-test-sources-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/**', 'scripts/patch_series.py') }}
+      - name: Prepare and verify the canonical macOS test sources
+        run: dependencies/prepare.sh --product macos
+      - uses: actions/cache/save@v4
+        if: steps.macos-test-sources.outputs.cache-hit != 'true'
+        with:
+          path: |
+            external/sources
+            .build/dependency-cache
+          key: ${{ steps.macos-test-sources.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        id: macos-test-prefix
+        with:
+          path: .build/dependencies/macos-arm64-27
+          key: macos-test-prefix-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'darwin/cpu/x86_64/**', 'cmake/**', 'tools/ci/apple-toolchain-key.sh') }}
+      - name: Build or fully verify the canonical macOS test prefix
+        run: dependencies/build.sh --jobs 3
+      - uses: actions/cache/save@v4
+        if: steps.macos-test-prefix.outputs.cache-hit != 'true'
+        with:
+          path: .build/dependencies/macos-arm64-27
+          key: ${{ steps.macos-test-prefix.outputs.cache-primary-key }}
+      - name: Check host boot contracts
+        run: |
+          cmake --preset macos-unit
+          cmake --build --preset unit-test-binaries --parallel 3
+          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium-(loader-|settle-plumbing|console-)|kernarium-device-framework-|boot-initramfs|rootfs-boot-base|rootfs-starter|andarium-stage-system-image'
       - name: Mark boot and persistence tests passed
         env:
           GH_TOKEN: ${{ github.token }}
