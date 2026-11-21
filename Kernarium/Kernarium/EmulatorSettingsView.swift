@@ -5,6 +5,7 @@ import SwiftUI
 import UIKit
 
 struct EmulatorSettingsView: View {
+    @ObservedObject private var launcher = EmulatorLauncher.shared
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var microphone = MicrophoneSetting.shared
 
@@ -114,6 +115,13 @@ struct EmulatorSettingsView: View {
                     .accessibilityIdentifier("vCPUCountStepper")
                     .onChange(of: configuration.vCPUCount) { oldCount, _ in
                         configuration.vCPUCountChanged(from: oldCount)
+                    }
+
+                    Toggle("Use JIT when available", isOn: $configuration.jitEnabled)
+                        .accessibilityIdentifier("jitEnabledToggle")
+                    if let status = launcher.jitStatus {
+                        Text(status).font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("jitEngineStatus")
                     }
 
                     // Where no size fits (the bound is zero) the stepper has no

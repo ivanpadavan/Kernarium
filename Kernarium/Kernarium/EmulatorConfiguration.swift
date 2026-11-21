@@ -118,6 +118,7 @@ struct EmulatorConfiguration: Equatable {
     var autoResizeGuest: Bool
     var androidBootMode: AndroidBootMode
     var linuxGraphicalBoot = true
+    var jitEnabled = true
     var gpuBudgetApplicationMiB = defaultGPUBudgetApplicationMiB
     var gpuBudgetEngineMiB = defaultGPUBudgetEngineMiB
     var gpuBudgetHeadroomMiB = defaultGPUBudgetHeadroomMiB
@@ -321,6 +322,7 @@ struct EmulatorConfiguration: Equatable {
             androidBootMode: environmentAndroidBootMode ?? storedAndroidBootMode,
             linuxGraphicalBoot: environmentFlag("KERNARIUM_LINUX_CONSOLE_BOOT")
                 .map { !$0 } ?? stored(Key.linuxGraphicalBoot, true),
+            jitEnabled: environmentFlag("KERNARIUM_JIT") ?? stored(Key.jitEnabled, true),
             gpuBudgetApplicationMiB: gpuBudgetApplicationMiB,
             gpuBudgetEngineMiB: gpuBudgetEngineMiB,
             gpuBudgetHeadroomMiB: gpuBudgetHeadroomMiB
@@ -347,6 +349,7 @@ struct EmulatorConfiguration: Equatable {
         defaults.set(autoResizeGuest, forKey: Key.autoResizeGuest)
         defaults.set(androidBootMode.rawValue, forKey: Key.androidBootMode)
         defaults.set(linuxGraphicalBoot, forKey: Key.linuxGraphicalBoot)
+        defaults.set(jitEnabled, forKey: Key.jitEnabled)
     }
 
     private static func normalizedGuestMemoryMiB(_ value: Int) -> Int {
@@ -395,6 +398,7 @@ struct EmulatorConfiguration: Equatable {
         static let autoResizeGuest = "emulator.autoResizeGuest"
         static let androidBootMode = "emulator.androidBootMode"
         static let linuxGraphicalBoot = "emulator.linuxGraphicalBoot"
+        static let jitEnabled = "emulator.jitEnabled"
     }
 }
 

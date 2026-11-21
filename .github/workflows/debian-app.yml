@@ -126,6 +126,10 @@ jobs:
         python3 -B tools/ci/debian-artifacts.py verify --root .build/test-host/Products --kind app-test-host --key "$GITHUB_SHA"
     - name: Clipboard, native selection and terminal resize tests
       run: python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --suite DebianAppTests --output "$RUNNER_TEMP/app-results"
+    - name: JIT preference, boot request and real Simulator fallback
+      run: |
+        rm -f .build/test-host/Products/selected.xctestrun
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --suite GuestJITTests --output "$RUNNER_TEMP/jit-results"
     - name: Check modifier reset through the application's visible controls
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
@@ -150,8 +154,8 @@ jobs:
         import json, os
         from pathlib import Path
         root=Path(os.environ['RUNNER_TEMP'])
-        tests={str(path.relative_to(root)):json.loads(path.read_text()) for folder in ('app-results','ui-results','persistent-results','mobile-results','storage-results') for path in (root/folder).glob('*-summary.json')}
-        assert len(tests)==8, tests
+        tests={str(path.relative_to(root)):json.loads(path.read_text()) for folder in ('app-results','jit-results','ui-results','persistent-results','mobile-results','storage-results') for path in (root/folder).glob('*-summary.json')}
+        assert len(tests)==9, tests
         for summary in tests.values():
             assert summary['totalTestCount']>0 and summary['passedTests']==summary['totalTestCount']
             assert summary['failedTests']==summary['skippedTests']==0
@@ -172,6 +176,8 @@ jobs:
           ${{ runner.temp }}/persistent-results/
           ${{ runner.temp }}/mobile-results/
           ${{ runner.temp }}/storage-results/
+
+          ${{ runner.temp }}/jit-results/
         if-no-files-found: warn
     - name: Clean up the shared test Simulator
       if: always()

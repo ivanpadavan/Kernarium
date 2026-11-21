@@ -55,7 +55,9 @@ struct ContentView: View {
                     .allowsHitTesting(guestViewMode == .serialConsole)
                     .accessibilityHidden(guestViewMode != .serialConsole)
 
-                if let progress = launcher.diskPreparation {
+                if launcher.jitPreparing {
+                    ProgressView("Preparing JIT…").padding().background(.regularMaterial, in: .rect(cornerRadius: 12))
+                } else if let progress = launcher.diskPreparation {
                     ProgressView(progress).padding().background(.regularMaterial, in: .rect(cornerRadius: 12))
                 } else if let error = launcher.diskPreparationError {
                     VStack(spacing: 12) {
@@ -1000,7 +1002,8 @@ private func runGuest(
     vCPUCount: UInt32,
     autoResizeGuest: Bool,
     gpuBudget: GPUBudgetParameters,
-    linuxGraphicalBoot: Bool
+    linuxGraphicalBoot: Bool,
+    jit: GuestJITChoice
 ) -> Int32 {
     boot.withCPaths { paths in
         var request = kernarium_runtime_boot()
@@ -1013,6 +1016,7 @@ private func runGuest(
         request.android_boot_mode = boot.androidBootMode.rawValue
         request.linux_console_boot = linuxGraphicalBoot ? 0 : 1
         request.auto_resize_guest = autoResizeGuest ? 1 : 0
+        jit.apply(to: &request)
         request.gpu_budget_application_mib = gpuBudget.applicationMiB
         request.gpu_budget_engine_mib = gpuBudget.engineMiB
         request.gpu_budget_headroom_mib = gpuBudget.headroomMiB
@@ -1066,6 +1070,8 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
     @Published private(set) var memoryRefusal: String?
     @Published private(set) var diskPreparation: String?
     @Published private(set) var diskPreparationError: String?
+    @Published private(set) var jitPreparing = false
+    @Published private(set) var jitStatus: String?
     private var skipsDiskGrowth = false
     private var restartIndicator = GuestRestartIndicator()
     /// The name the running guest's own settings are stored under.
@@ -1258,6 +1264,8 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
         let dotsPerInch = geometry.dotsPerInch
         let autoResizeGuest = configuration.autoResizeGuest
         let linuxGraphicalBoot = configuration.linuxGraphicalBoot
+        let jitEnabled = configuration.jitEnabled
+        jitPreparing = jitEnabled
         // The run occupies its thread for the guest's whole life and the GPU
         // service reaches the main queue while it starts, so it must not be the
         // main thread. Own the thread outright rather than depending on where a
@@ -1265,6 +1273,12 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
         // would otherwise block for hours. It inherits the main thread's
         // SIGALRM block, which the runtime then reasserts for itself.
         let worker = Thread {
+            let jit = GuestJITChoice.prepare(enabled: jitEnabled, memoryMiB: guestMemoryMiB, vCPUs: vCPUCount)
+            print("Kernarium: \(jit.status); requested=\(jitEnabled ? 1 : 0) preparation=\(jit.answer)")
+            Task { @MainActor in
+                EmulatorLauncher.shared.jitPreparing = false
+                EmulatorLauncher.shared.jitStatus = jit.status
+            }
             let result = Self.runThread(stop) {
                 runGuest(
                     view: view,
@@ -1276,7 +1290,8 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
                     vCPUCount: vCPUCount,
                     autoResizeGuest: autoResizeGuest,
                     gpuBudget: gpuBudget,
-                    linuxGraphicalBoot: linuxGraphicalBoot
+                    linuxGraphicalBoot: linuxGraphicalBoot,
+                    jit: jit
                 )
             }
             Task { @MainActor in

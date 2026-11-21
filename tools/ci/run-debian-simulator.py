@@ -181,6 +181,8 @@ def main():
                 assert counts['totalTestCount'] == 1, counts
             elif args.suite == 'DebianAppTests':
                 assert counts['totalTestCount'] == 5, counts
+            elif args.suite == 'GuestJITTests':
+                assert counts['totalTestCount'] == 3, counts
             if args.storage and phase == 'grow':
                 after = (documents / args.image.name).stat()
                 assert after.st_size == target and after.st_size > before.st_size
