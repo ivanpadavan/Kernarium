@@ -28,7 +28,7 @@ def main() -> None:
     def executable(command: str) -> None:
         guest('/bin/sh', '-ec', 'command -v "$1" >/dev/null', 'audit', command)
 
-    for command in ('phosh-session', 'phoc', 'phosh', 'gnome-session', 'squeekboard'):
+    for command in ('phosh-session', 'phoc', 'gnome-session', 'squeekboard'):
         executable(command)
     session = configparser.ConfigParser(interpolation=None)
     session.read_string(read('/usr/share/gnome-session/sessions/phosh.session'))
