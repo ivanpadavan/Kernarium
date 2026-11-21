@@ -855,7 +855,7 @@ class PackageOptionTests(unittest.TestCase):
         )
 
     def test_an_unknown_runtime_set_is_refused(self):
-        result = self.package("--runtimes", "linux")
+        result = self.package("--runtimes", "unsupported")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--runtimes takes all, linux or android", result.stderr)
 

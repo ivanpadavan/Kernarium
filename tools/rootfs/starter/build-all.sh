@@ -42,7 +42,7 @@ must be absolute and distinct outside the source tree. The output path must
 not exist; the completed release directory is published atomically.
 
 --product builds only the named products, each at most once; by default the
-release holds every product but the armhf one:
+release holds the five DEFAULT_PRODUCTS. armhf and Phosh are opt-in:
   boot-base-aarch64 boot-base-x86_64 alpine debian-13-minimal
   debian-13-plasma-wayland debian-13-minimal-armhf debian-13-phosh
 

@@ -36,7 +36,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential bc bison flex cpio curl debootstrap e2fsprogs gdisk \
             gzip libncurses-dev patch perl python3 rsync sudo tar unzip wget \
-            file git zstd
+            file git zip
       - name: Build Debian Phosh and its boot base
         run: |
           tools/rootfs/starter/build-all.sh \
@@ -49,7 +49,9 @@ jobs:
             --release "debian-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --output "$RUNNER_TEMP/starter-release/accepted-aarch64.env"
           python3 -B tools/rootfs/starter/gpt.py "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
-          zstd -T4 -6 --rm "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
+          zip -9 -j "$RUNNER_TEMP/starter-release/debian-13-phosh.img.zip" \
+            "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
+          rm "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
           python3 -c 'from pathlib import Path; import sys; files=list(Path(sys.argv[1]).iterdir()); assert all(p.stat().st_size < 2**31 for p in files), "Release asset exceeds 2 GiB"' "$RUNNER_TEMP/starter-release"
       - name: Upload rootfs assets to the draft
         env:
@@ -74,6 +76,7 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - name: Prepare isolated case-sensitive kernel filesystem
         run: |
           hdiutil create -size 24g -type SPARSE -fs HFSX \
@@ -130,7 +133,7 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version | awk -F. '$1 >= 27 { ok=1 } END { exit !ok }'
           xcodebuild -downloadComponent MetalToolchain
           brew install cmake ninja make meson pkgconf autoconf automake libtool \
-            gettext gperf groff bison flex rsync zstd
+            gettext gperf groff bison flex rsync
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
@@ -174,7 +177,7 @@ jobs:
         run: |
           cmake --preset macos-unit
           cmake --build --preset unit-test-binaries --parallel 3
-          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium|boot-initramfs|rootfs-boot-base|rootfs-starter'
+          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium|boot-initramfs|rootfs-boot-base|rootfs-starter|andarium-stage-system-image'
       - name: Build unsigned iPhone application
         run: |
           xcodebuild -resolvePackageDependencies -project Kernarium/Kernarium.xcodeproj -scheme Kernarium
@@ -197,7 +200,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO test
       - name: Boot Phosh, write persistent data, shut down
         run: |
-          zstd -d --rm .build/ci-download/debian-13-phosh.img.zst
+          unzip -q .build/ci-download/debian-13-phosh.img.zip -d .build/ci-download
+          rm .build/ci-download/debian-13-phosh.img.zip
           df -h "$PWD"
           Kernarium/scripts/run-ios-mac.sh --no-build --ad-hoc \
             --rootfs "$PWD/.build/ci-download/debian-13-phosh.img" \
@@ -218,4 +222,4 @@ jobs:
           python3 -c 'from pathlib import Path; assert Path(".build/Kernarium-Debian.ipa").stat().st_size < 2**31, "IPA exceeds 2 GiB"'
           gh release upload "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" .build/Kernarium-Debian.ipa --clobber
           gh release edit "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --draft=false --prerelease \
-            --notes "Unsigned Kernarium IPA for SideStore; iOS 27+ and Metal 4 required by current upstream. Debian 13 ARM64 Phosh disk is delivered as .img.zst: decompress and place debian-13-phosh.img in Kernarium Documents. Start graphical desktop selects Phosh or the console for the next launch. The disk persists; replacing it erases its guest data. CI passed build, graphical boot, console boot, clean shutdown and data persistence checks on an Apple silicon Mac using the iOS runtime. No physical iPhone or LiveContainer validation has been performed. Local console user debian has passwordless sudo; run passwd before using a lock screen. SSH permits only owner-installed public keys. Sources: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+            --notes "Unsigned Kernarium IPA for SideStore; iOS 27+ and Metal 4 required by current upstream. Debian 13 ARM64 Phosh disk is delivered as .img.zip: unzip in Files and place debian-13-phosh.img in Kernarium Documents. Start graphical desktop selects Phosh or the console for the next launch. The disk persists; replacing it erases its guest data. CI passed build, graphical boot, console boot, clean shutdown and data persistence checks on an Apple silicon Mac using the iOS runtime. No physical iPhone or LiveContainer validation has been performed. Local console user debian has passwordless sudo; run sudo passwd debian before using a lock screen. SSH permits only owner-installed public keys. Sources: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."

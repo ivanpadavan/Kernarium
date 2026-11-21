@@ -2566,17 +2566,15 @@ int runtimeRun(
         request.rootfsPath = rootfsPath;
         request.overlayPath = overlayPath == nullptr ? "" : overlayPath;
         request.derivativeRootfs = ext4Rootfs(rootfsPath);
-        if (boot->struct_size >= offsetof(kernarium_runtime_boot, linux_console_boot) +
-                                     sizeof(boot->linux_console_boot) &&
-            boot->linux_console_boot > 1) {
+        const bool hasLinuxConsoleBoot = boot->struct_size >=
+            offsetof(kernarium_runtime_boot, linux_console_boot) +
+                sizeof(boot->linux_console_boot);
+        if (hasLinuxConsoleBoot && boot->linux_console_boot > 1) {
             std::fputs("Kernarium: invalid Linux boot mode\n", stderr);
             return -UML_EMULATOR_INVALID_ARGUMENT;
         }
-        request.systemdUnit =
-            boot->struct_size >= offsetof(kernarium_runtime_boot, linux_console_boot) +
-                                     sizeof(boot->linux_console_boot) &&
-                    boot->linux_console_boot != 0
-                ? "multi-user.target" : "graphical.target";
+        request.systemdUnit = hasLinuxConsoleBoot && boot->linux_console_boot != 0
+            ? "multi-user.target" : "graphical.target";
 #endif
         /* A stop asked for before this run is not carried into it, and the
          * disposition every later run of the library returns to is set before
@@ -2709,7 +2707,7 @@ int runtimeRun(
                     "target %s\n",
                     automation->payload().size(),
                     automation->systemdUnit().empty()
-                        ? "graphical.target"
+                        ? request.systemdUnit.c_str()
                         : automation->systemdUnit().c_str());
             const RunInitrd initrd {
                 request.derivativeRootfs, request.persistentDisk,

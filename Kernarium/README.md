@@ -162,10 +162,10 @@ The fork's Xcode target embeds Linux alone. Package it with
 `Kernarium/scripts/package-ios-frameworks.sh --sdk device --runtimes linux`.
 Current upstream requires iOS 27 and Metal 4; CI uses the `xcode-27` ARM64
 macOS 27 image. The downloaded IPA is unsigned for signing in SideStore.
-Decompress `debian-13-phosh.img.zst` and put `debian-13-phosh.img` in the app's
+Unzip `debian-13-phosh.img.zip` in Files and put `debian-13-phosh.img` in the app's
 Documents directory using Files. Reuse the disk to keep installed packages,
 repositories and user files. The desktop and the serial console log in as
-`debian`; `sudo` needs no password. Set a personal password with `passwd`
+`debian`; `sudo` needs no password. Set a personal password with `sudo passwd debian`
 before using the Phosh lock screen. SSH accepts only public keys the owner
 installs; each guest generates its own host keys on first boot.
 
