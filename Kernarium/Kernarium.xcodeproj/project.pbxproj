@@ -45,7 +45,6 @@
 			dstSubfolderSpec = 10;
 			files = (
 				A10000000000000000000007 /* KRuntime_6_18_4K.xcframework in Embed Frameworks */,
-				A10000000000000000000008 /* KRuntime_Android_6_18_4K.xcframework in Embed Frameworks */,
 				A10000000000000000000005 /* MesaEGL.xcframework in Embed Frameworks */,
 				A10000000000000000000006 /* MesaGallium.xcframework in Embed Frameworks */,
 			);

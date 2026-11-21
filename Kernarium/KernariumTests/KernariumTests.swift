@@ -736,7 +736,7 @@ struct KernariumTests {
         )
         #expect(configuration.overlaySizeGiB == 8)
         #expect(configuration.androidDiskSizeGiB == 8)
-        #expect(configuration.rootfsFilename == "kde-20260929-r2.erofs")
+        #expect(configuration.rootfsFilename == "debian-13-phosh.img")
         #expect(configuration.retinaMode == false)
         #expect(configuration.autoResizeGuest == true)
         #expect(configuration.androidBootMode == .automatic)
@@ -938,7 +938,7 @@ struct KernariumTests {
         #expect(normalized.guestMemoryMiB == 1024)
         #expect(normalized.overlaySizeGiB == 1)
         #expect(normalized.androidDiskSizeGiB == 64)
-        #expect(normalized.rootfsFilename == "kde-20260929-r2.erofs")
+        #expect(normalized.rootfsFilename == "debian-13-phosh.img")
         #expect(normalized.retinaMode == true)
         #expect(normalized.autoResizeGuest == false)
         #expect(normalized.androidBootMode == .recovery)
@@ -1420,10 +1420,11 @@ struct KernariumTests {
             defaults.object(forKey: "emulator.autoResizeGuest") as? Bool == false
         )
         #expect(defaults.integer(forKey: "emulator.androidBootMode") == 1)
+        #expect(defaults.bool(forKey: "emulator.linuxGraphicalBoot"))
         // Nothing else is stored.
         #expect(
             defaults.dictionaryRepresentation().keys
-                .filter { $0.hasPrefix("emulator.") }.count == 8
+                .filter { $0.hasPrefix("emulator.") }.count == 9
         )
     }
 
@@ -1541,6 +1542,29 @@ struct KernariumTests {
     }
 
     @Test
+    func linuxBootSelectionPersistsAndEnvironmentOverridesOneLaunch() throws {
+        let name = "linux-boot-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var configuration = EmulatorConfiguration.load(
+            defaults: defaults, physicalProcessorCount: 4, environment: [:],
+            guestMemoryBound: Self.unboundedGuestMemory
+        )
+        configuration.linuxGraphicalBoot = false
+        configuration.save(defaults: defaults)
+        #expect(!EmulatorConfiguration.load(
+            defaults: defaults, physicalProcessorCount: 4, environment: [:],
+            guestMemoryBound: Self.unboundedGuestMemory
+        ).linuxGraphicalBoot)
+        #expect(EmulatorConfiguration.load(
+            defaults: defaults, physicalProcessorCount: 4,
+            environment: ["KERNARIUM_LINUX_CONSOLE_BOOT": "0"],
+            guestMemoryBound: Self.unboundedGuestMemory
+        ).linuxGraphicalBoot)
+        #expect(!defaults.bool(forKey: "emulator.linuxGraphicalBoot"))
+    }
+
+    @Test
     func rootfsSelectionAcceptsOnlyDocumentsFilenames() {
         #expect(
             RootfsImage.selectedFilename(
@@ -1576,7 +1600,7 @@ struct KernariumTests {
             RootfsImage.selectedFilename(
                 configuredFilename: "rootfs.erofs",
                 environment: [RootfsImage.environmentKey: "phosh.img"]
-            ) == nil
+            ) == "phosh.img"
         )
         // The name ends up in a UBD kernel argument, which these would split
         // or misread.
@@ -1623,7 +1647,7 @@ struct KernariumTests {
         )
         #expect(
             manager.createFile(
-                atPath: directory.appendingPathComponent("ignored.img").path,
+                atPath: directory.appendingPathComponent("debian-13-phosh.img").path,
                 contents: Data()
             )
         )
@@ -1634,6 +1658,7 @@ struct KernariumTests {
 
         #expect(
             RootfsImage.availableFilenames(in: directory) == [
+                "debian-13-phosh.img",
                 "phosh.erofs",
                 "pmos-sxmo.erofs",
                 "rootfs-gl-gles.ext4",

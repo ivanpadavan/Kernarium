@@ -23,7 +23,7 @@ DEBIAN_MIRROR=http://deb.debian.org/debian
 # provides. --exclude cannot drop it, because the dependency pulls it back.
 ARMHF_INCLUDE=systemd-sysv,systemd-resolved,udev,kmod,dbus,ca-certificates,libbpf1
 DEFAULT_PRODUCTS="boot-base-aarch64 boot-base-x86_64 alpine debian-13-minimal debian-13-plasma-wayland"
-KNOWN_PRODUCTS="$DEFAULT_PRODUCTS debian-13-minimal-armhf"
+KNOWN_PRODUCTS="$DEFAULT_PRODUCTS debian-13-minimal-armhf debian-13-phosh"
 
 fail()
 {
@@ -44,7 +44,7 @@ not exist; the completed release directory is published atomically.
 --product builds only the named products, each at most once; by default the
 release holds every product but the armhf one:
   boot-base-aarch64 boot-base-x86_64 alpine debian-13-minimal
-  debian-13-plasma-wayland debian-13-minimal-armhf
+  debian-13-plasma-wayland debian-13-minimal-armhf debian-13-phosh
 
 debian-13-minimal-armhf runs ARM programs under qemu-arm (Debian's qemu-user)
 in private namespaces.
@@ -527,6 +527,82 @@ build_debian_minimal()
 	cp "$work_dir/debian-minimal.packages.tsv" "$destination.packages.tsv"
 }
 
+# The same writable root boots either target. greetd is wanted only by
+# graphical.target, so multi-user.target starts no compositor or desktop.
+build_debian_phosh()
+{
+	printf '%s\n' "==> Building Debian 13 Phosh GPT image"
+	root=$roots_dir/debian-phosh
+	debootstrap_root "$root"
+	mount_chroot_proc "$root"
+	prepare_debian_base "$root"
+	install_debian_base "$root"
+	as_root chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+		apt-get install -y --no-install-recommends \
+		phosh phoc greetd foot dbus-user-session libpam-systemd \
+		libgl1-mesa-dri libegl-mesa0 sudo openssh-server procps
+	as_root test -x "$root/usr/bin/phosh-session"
+	as_root test -x "$root/usr/sbin/agreety"
+	as_root chroot "$root" useradd --create-home --uid 1000 --shell /bin/bash debian
+	for group in video render input audio; do
+		as_root chroot "$root" groupadd --force "$group"
+		as_root chroot "$root" usermod --append --groups "$group" debian
+	done
+	configure_debian_base "$root" debian debian
+	write_root_file "$root/etc/sudoers.d/debian" 0440 <<'EOF'
+debian ALL=(ALL:ALL) NOPASSWD: ALL
+EOF
+	# No shared password or SSH host identity is published. The local console
+	# autologin is the setup path; SSH accepts keys installed by the owner.
+	write_root_file "$root/etc/ssh/sshd_config.d/10-kernarium.conf" 0644 <<'EOF'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+EOF
+	as_root rm -f "$root/etc/ssh/ssh_host_"*
+	write_root_file "$root/etc/systemd/system/ssh-host-keys.service" 0644 <<'EOF'
+[Unit]
+Description=Generate this guest's SSH host keys
+Before=ssh.service
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+[Install]
+WantedBy=multi-user.target
+EOF
+	write_root_file "$root/etc/greetd/config.toml" 0644 <<'EOF'
+[terminal]
+vt = 1
+[default_session]
+command = "/usr/sbin/agreety --cmd /usr/bin/phosh-session"
+user = "_greetd"
+[initial_session]
+command = "/usr/bin/phosh-session"
+user = "debian"
+EOF
+	# Debian's package may enable greetd through a display-manager alias.
+	# Keep one explicit graphical dependency and none in multi-user.target.
+	as_root systemctl --root="$root" disable greetd.service || true
+	as_root rm -f "$root/etc/systemd/system/display-manager.service" \
+		"$root/etc/systemd/system/graphical.target.wants/phosh.service"
+	as_root mkdir -p "$root/etc/systemd/system/graphical.target.wants"
+	as_root ln -s /usr/lib/systemd/system/greetd.service \
+		"$root/etc/systemd/system/graphical.target.wants/greetd.service"
+	as_root systemctl --root="$root" enable ssh-host-keys.service ssh.service
+	as_root systemctl --root="$root" set-default graphical.target
+	as_root chroot "$root" dpkg-query -W -f='${binary:Package}\t${Version}\n' | \
+		sort > "$work_dir/debian-phosh.packages.tsv"
+	unmount_chroot_proc
+	cat "$root/etc/debian_version" > "$work_dir/debian.version"
+	prune_debian "$root"
+	destination=$(artifact_path debian-13-phosh.img)
+	as_root python3 "$SCRIPT_DIR/make-gpt-image.py" \
+		--root "$root" --output "$destination" --label debian-phosh \
+		--headroom-mib 1024
+	as_root chown "$owner_uid:$owner_gid" "$destination"
+	cp "$work_dir/debian-phosh.packages.tsv" "$destination.packages.tsv"
+}
+
 configure_plasma_user()
 {
 	root=$1
@@ -773,6 +849,9 @@ fi
 if wants debian-13-plasma-wayland; then
 	build_debian_plasma
 fi
+if wants debian-13-phosh; then
+	build_debian_phosh
+fi
 if wants debian-13-minimal-armhf; then
 	build_debian_minimal_armhf
 fi
@@ -800,6 +879,7 @@ if wants alpine; then
 		--alpine-sha256 "$ALPINE_SHA256"
 fi
 if wants debian-13-minimal || wants debian-13-plasma-wayland || \
+	wants debian-13-phosh || \
 	wants debian-13-minimal-armhf; then
 	set -- "$@" --debian-suite "$DEBIAN_SUITE" \
 		--debian-version "$(cat "$work_dir/debian.version")"

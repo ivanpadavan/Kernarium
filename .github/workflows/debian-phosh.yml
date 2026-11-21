@@ -1,0 +1,205 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Debian Phosh for iPhone
+on:
+  workflow_dispatch:
+  push:
+    branches: [debian-phosh]
+permissions:
+  contents: write
+concurrency:
+  group: debian-phosh-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create draft download location
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --target "$GITHUB_SHA" --draft \
+            --title "Debian Phosh ${GITHUB_SHA::7}" \
+            --notes "CI build in progress. Rootfs and IPA are published only after build and boot checks pass."
+  rootfs:
+    needs: release
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native ARM64 rootfs build tools
+        run: |
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex cpio curl debootstrap e2fsprogs gdisk \
+            gzip libncurses-dev patch perl python3 rsync sudo tar unzip wget \
+            file git zstd
+      - name: Build Debian Phosh and its boot base
+        run: |
+          tools/rootfs/starter/build-all.sh \
+            --work "$RUNNER_TEMP/starter-work" --output "$RUNNER_TEMP/starter-release" \
+            --jobs 4 --product boot-base-aarch64 --product debian-13-phosh
+      - name: Audit and accept this run's boot base
+        run: |
+          python3 -B tools/ci/accept-boot-base.py \
+            --archive "$RUNNER_TEMP/starter-release/uml-boot-base-aarch64.cpio.gz" \
+            --release "debian-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --output "$RUNNER_TEMP/starter-release/accepted-aarch64.env"
+          python3 -B tools/rootfs/starter/gpt.py "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
+          zstd -T4 -6 --rm "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
+      - name: Upload rootfs assets to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "$RUNNER_TEMP/starter-release/"* --clobber
+  kernel:
+    needs: release
+    runs-on: xcode-27
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kernel producer host tools
+        run: |
+          test "$(uname -m)" = arm64
+          brew install cmake ninja make meson pkgconf autoconf automake libtool \
+            gettext gperf groff bison flex llvm rsync
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Prepare isolated case-sensitive kernel filesystem
+        run: |
+          hdiutil create -size 24g -type SPARSE -fs APFSX \
+            -volname KernariumKernel "$RUNNER_TEMP/kernel.sparseimage"
+          mkdir "$RUNNER_TEMP/kernel-volume"
+          hdiutil attach "$RUNNER_TEMP/kernel.sparseimage" \
+            -mountpoint "$RUNNER_TEMP/kernel-volume" -nobrowse
+          printf 'UML_KERNEL_SOURCE_DIR=%s/linux\n' "$RUNNER_TEMP/kernel-volume" \
+            > kernel/mainline-6.18/source-location.conf
+      - name: Prepare pinned host tools and Linux kernel source
+        run: |
+          dependencies/prepare.sh --product kernel-host-tools
+          dependencies/prepare.sh --archive-manifest dependencies/kernel-host-tools/archives.tsv
+          dependencies/build-kernel-host-tools.sh --jobs 3
+          kernel/mainline-6.18/scripts/prepare-source.sh --slice arm64 \
+            --cache "$RUNNER_TEMP/kernel-volume/cache"
+      - name: Build and validate Linux kernel artifact
+        run: |
+          kernel/mainline-6.18/build/build-kernel.sh --product linux --slice arm64 \
+            --build "$RUNNER_TEMP/kernel-volume/build" --jobs 3
+          . kernel/mainline-6.18/artifacts/accepted-4k.env
+          python3 -B kernel/mainline-6.18/build/publish-artifact.py \
+            --source "$RUNNER_TEMP/kernel-volume/linux" \
+            --build "$RUNNER_TEMP/kernel-volume/build" --slice arm64 --product linux \
+            --output-root "$PWD/.build/kernel/artifacts" \
+            --release-id "$UML_KERNEL_ARTIFACT_RELEASE_ID" \
+            --objcopy "$(brew --prefix llvm)/bin/llvm-objcopy"
+          tar -C .build/kernel/artifacts -czf "$RUNNER_TEMP/linux-kernel.tar.gz" \
+            "$UML_KERNEL_ARTIFACT_DIRECTORY_NAME"
+      - name: Upload validated kernel artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "$RUNNER_TEMP/linux-kernel.tar.gz" --clobber
+  iphone:
+    needs: [rootfs, kernel]
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 27 and install build tools
+        run: |
+          test "$(uname -m)" = arm64
+          XCODE_PATH=$(python3 -c 'import pathlib; p=sorted(pathlib.Path("/Applications").glob("Xcode_27*.app")); print(p[-1] if p else "/Applications/Xcode.app")')
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version | awk -F. '$1 >= 27 { ok=1 } END { exit !ok }'
+          xcodebuild -downloadComponent MetalToolchain
+          brew install cmake ninja make meson pkgconf autoconf automake libtool \
+            gettext gperf groff bison flex rsync zstd
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Download validated CI inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .build/ci-download .build/kernel/artifacts
+          gh release download "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --dir .build/ci-download
+          tar -C .build/kernel/artifacts -xzf .build/ci-download/linux-kernel.tar.gz
+          cp .build/ci-download/accepted-aarch64.env tools/rootfs/boot-ramdisk/accepted-aarch64.env
+          . tools/rootfs/boot-ramdisk/accepted-aarch64.env
+          mkdir -p ".build/rootfs/$UML_BOOT_BASE_RELEASE"
+          cp .build/ci-download/uml-boot-base-aarch64.cpio.gz ".build/rootfs/$UML_BOOT_BASE_RELEASE/"
+          python3 -B tools/rootfs/boot-ramdisk/verify_base.py \
+            --descriptor tools/rootfs/boot-ramdisk/accepted-aarch64.env \
+            --archive ".build/rootfs/$UML_BOOT_BASE_RELEASE/uml-boot-base-aarch64.cpio.gz"
+          zstd -d .build/ci-download/debian-13-phosh.img.zst
+      - name: Prepare every pinned iOS dependency
+        run: |
+          for product in apple-gpu-vulkan-experiment ios-network ios-storage ios-compression; do
+            dependencies/prepare.sh --product "$product"
+          done
+          dependencies/build-apple-gpu.sh --platform ios --jobs 3
+          dependencies/build-ios-network.sh --platform ios --jobs 3
+          dependencies/build-ios-storage.sh
+          dependencies/build-ios-zstd.sh
+      - name: Build Linux runtime and package frameworks
+        run: |
+          cmake --preset kernarium-ios-device
+          cmake --build --preset kernarium-ios-device --parallel 3
+          Kernarium/scripts/package-ios-frameworks.sh --sdk device --runtimes linux
+      - name: Check host boot contracts
+        run: |
+          cmake --preset macos-unit
+          cmake --build --preset unit-test-binaries --parallel 3
+          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium|boot-initramfs|rootfs-boot-base|rootfs-starter'
+      - name: Build unsigned iPhone application
+        run: |
+          xcodebuild -resolvePackageDependencies -project Kernarium/Kernarium.xcodeproj -scheme Kernarium
+          xcodebuild -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/.build/iphone-derived" -jobs 3 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          mkdir -p .build/ipa/Payload
+          cp -R .build/iphone-derived/Build/Products/Release-iphoneos/Kernarium.app .build/ipa/Payload/
+          (cd .build/ipa && zip -qry ../Kernarium-Debian.ipa Payload)
+      - name: Bootstrap app container on the Mac
+        run: |
+          xcodebuild -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
+            -configuration Release -destination 'platform=macOS,variant=Designed for iPad' \
+            -derivedDataPath "$PWD/.build/kernarium-xcode-derived" -jobs 3 \
+            -only-testing:KernariumTests/PersistentDebianTests \
+            -only-testing:KernariumTests/KernariumTests/rootfsSelectionAcceptsOnlyDocumentsFilenames \
+            -only-testing:KernariumTests/KernariumTests/linuxBootSelectionPersistsAndEnvironmentOverridesOneLaunch \
+            ENABLE_TESTABILITY=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            CODE_SIGNING_REQUIRED=NO test
+      - name: Boot Phosh, write persistent data, shut down
+        run: |
+          Kernarium/scripts/run-ios-mac.sh --no-build --ad-hoc \
+            --rootfs "$PWD/.build/ci-download/debian-13-phosh.img" \
+            --only-testing KernariumTests/PersistentDebianTests \
+            --test-env KERNARIUM_DEBIAN_SMOKE=write \
+            --test-env KERNARIUM_LINUX_CONSOLE_BOOT=0
+      - name: Boot console from the same disk and verify data
+        run: |
+          Kernarium/scripts/run-ios-mac.sh --no-build --ad-hoc \
+            --rootfs "$PWD/.build/ci-download/debian-13-phosh.img" \
+            --only-testing KernariumTests/PersistentDebianTests \
+            --test-env KERNARIUM_DEBIAN_SMOKE=read \
+            --test-env KERNARIUM_LINUX_CONSOLE_BOOT=1
+      - name: Publish IPA and successful release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" .build/Kernarium-Debian.ipa --clobber
+          gh release edit "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --draft=false --prerelease \
+            --notes "Unsigned Kernarium IPA for SideStore; iOS 27+ and Metal 4 required by current upstream. Debian 13 ARM64 Phosh disk is delivered as .img.zst: decompress and place debian-13-phosh.img in Kernarium Documents. Start graphical desktop selects Phosh or the console for the next launch. The disk persists; replacing it erases its guest data. CI passed build, graphical boot, console boot, clean shutdown and data persistence checks on an Apple silicon Mac using the iOS runtime. No physical iPhone or LiveContainer validation has been performed. Local console user debian has passwordless sudo; run passwd before using a lock screen. SSH permits only owner-installed public keys. Sources: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
