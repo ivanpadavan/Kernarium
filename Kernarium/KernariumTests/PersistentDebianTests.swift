@@ -79,10 +79,12 @@ struct PersistentDebianTests {
             }
             if clock.now >= nextInput, !writing || presentedFrames > 0 {
                 let bytes = Array(command.utf8)
-                _ = bytes.withUnsafeBytes {
-                    kernarium_runtime_loader_send_console_input(
-                        $0.baseAddress, $0.count
-                    )
+                bytes.withUnsafeBytes { buffer in
+                    if let baseAddress = buffer.baseAddress {
+                        _ = kernarium_runtime_loader_send_console_input(
+                            baseAddress, buffer.count
+                        )
+                    }
                 }
                 nextInput = clock.now.advanced(by: .seconds(15))
             }
@@ -93,8 +95,10 @@ struct PersistentDebianTests {
                 "id; tty; ps -ef; " +
                 "sudo journalctl -b -u greetd.service -n 100 --no-pager\n"
             ).utf8)
-            _ = diagnostics.withUnsafeBytes {
-                kernarium_runtime_loader_send_console_input($0.baseAddress, $0.count)
+            diagnostics.withUnsafeBytes { buffer in
+                if let baseAddress = buffer.baseAddress {
+                    _ = kernarium_runtime_loader_send_console_input(baseAddress, buffer.count)
+                }
             }
             try await Task.sleep(for: .seconds(3))
         }
