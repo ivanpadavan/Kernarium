@@ -136,6 +136,7 @@ jobs:
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --ui-case KernariumUITests/testGraphicalModifiersAreReleasedWhenChangingModes --output "$RUNNER_TEMP/ui-results"
     - name: Fetch a previously boot-qualified Phosh disk without building any image
+      id: golden
       run: python3 -B tools/ci/qualified-debian-image.py --wait-seconds 1800 --output "$RUNNER_TEMP/golden-image"
     - name: Preserve the original real Phosh-to-console persistence smoke
       run: |
@@ -146,6 +147,7 @@ jobs:
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianMobileTests --single-phase --output "$RUNNER_TEMP/mobile-results"
     - name: Increase the disk before boot and check ext4 and data across two reboots
+      if: ${{ !cancelled() && steps.golden.outcome == 'success' }}
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianStorageTests --storage --output "$RUNNER_TEMP/storage-results"
