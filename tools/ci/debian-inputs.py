@@ -46,6 +46,7 @@ GROUPS = {
                'tools/ci/run-debian-simulator.py', 'tools/ci/debian-inputs.py'],
     'image-ci': ['.github/workflows/debian-phosh-image.yml', '.github/workflows/debian-image-product.yml',
                  'tools/ci/debian-artifacts.py', 'tools/ci/debian-image.sh',
+                 'tools/ci/run-debian-simulator.py',
                  'tools/ci/actions_artifact.py',
                  'tools/ci/debian-inputs.py'],
 }

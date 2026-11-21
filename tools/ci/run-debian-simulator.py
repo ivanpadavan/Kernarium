@@ -6,19 +6,28 @@ import json
 import os
 from pathlib import Path
 import plistlib
-import queue
 import shutil
 import subprocess
-import threading
+import tempfile
 import time
 
 
 def run(*command, timeout=120, **kwargs):
-    return subprocess.run(command, check=True, timeout=timeout, **kwargs)
+    return subprocess.run(command, check=True, timeout=timeout, stdin=subprocess.DEVNULL, **kwargs)
 
 
 def capture(*command):
-    return subprocess.check_output(command, text=True, timeout=60).strip()
+    # A service spawned by an Apple command may inherit its output handle.
+    # A regular file does not make command completion wait for pipe EOF.
+    with tempfile.TemporaryFile() as output:
+        try:
+            run(*command, stdout=output, timeout=60)
+        except subprocess.SubprocessError:
+            output.seek(0)
+            print('Command output before failure:', output.read().decode('utf-8', errors='replace'), flush=True)
+            raise
+        output.seek(0)
+        return output.read().decode('utf-8').strip()
 
 
 def create_simulator(family):
@@ -91,6 +100,7 @@ def main():
     if args.state and not reused:
         args.state.write_text(json.dumps({'device': udid}) + '\n')
     container = None
+    failed = False
     try:
         if not reused:
             run('xcrun', 'simctl', 'boot', udid)
@@ -137,33 +147,24 @@ def main():
             command = ['xcodebuild', 'test-without-building', '-xctestrun', str(selected), '-destination', 'id=' + udid,
                        '-parallel-testing-enabled', 'NO', '-resultBundlePath', str(result),
                        '-only-testing:' + test_identifier, 'CODE_SIGNING_ALLOWED=NO']
-            with (output / (phase + '-boot.log')).open('w') as log:
-                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            log_path = output / (phase + '-boot.log')
+            with log_path.open('wb') as log, log_path.open('rb') as live:
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                            env={**os.environ, **{'TEST_RUNNER_' + k: v for k, v in environment.items()}})
-                lines = queue.Queue()
-                def read_lines():
-                    try:
-                        for line in process.stdout:
-                            lines.put(line)
-                    finally:
-                        lines.put(None)
-                threading.Thread(target=read_lines, daemon=True).start()
                 deadline = time.monotonic() + 1200
                 try:
                     while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise subprocess.TimeoutExpired(command, 1200)
-                        try:
-                            line = lines.get(timeout=min(remaining, 1))
-                        except queue.Empty:
-                            continue
-                        if line is None:
+                        chunk = live.read()
+                        if chunk:
+                            print(chunk.decode('utf-8', errors='replace'), end='', flush=True)
+                        if process.poll() is not None:
+                            # Re-read after observing exit, so the final test
+                            # output is retained even if a service holds stdout.
+                            print(live.read().decode('utf-8', errors='replace'), end='', flush=True)
                             break
-                        log.write(line)
-                        log.flush()
-                        print(line, end='', flush=True)
-                    process.wait(timeout=max(1, deadline - time.monotonic()))
+                        if time.monotonic() >= deadline:
+                            raise subprocess.TimeoutExpired(command, 1200)
+                        time.sleep(0.2)
                 except BaseException:
                     process.kill()
                     process.wait(timeout=30)
@@ -190,6 +191,7 @@ def main():
                 print('STORAGE_HOST_PROOF:', before.st_size, '->', after.st_size,
                       'allocated bytes:', after.st_blocks * 512, flush=True)
     except BaseException as error:
+        failed = True
         (output / 'runner-error.txt').write_text(repr(error) + '\n')
         raise
     finally:
@@ -198,10 +200,11 @@ def main():
                 log = container / 'Library/Caches/debian-boot.log'
                 if log.exists():
                     shutil.copyfile(log, output / 'application-boot.log')
-            with (output / 'simulator-host.log').open('w') as log:
-                subprocess.run(['log', 'show', '--last', '10m', '--style', 'compact', '--predicate',
-                                'subsystem CONTAINS "CoreSimulator" OR process == "installd"'],
-                               stdout=log, stderr=subprocess.STDOUT, timeout=45)
+            if failed:
+                with (output / 'simulator-host.log').open('w') as log:
+                    subprocess.run(['log', 'show', '--last', '3m', '--style', 'compact', '--predicate',
+                                    'subsystem CONTAINS "CoreSimulator" OR process == "installd"'],
+                                   stdout=log, stderr=subprocess.STDOUT, timeout=45)
             subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', str(output / 'screen.png')], timeout=30)
         except (OSError, subprocess.SubprocessError) as error:
             print('Diagnostic collection:', error, flush=True)
