@@ -9,7 +9,7 @@ import Testing
 struct GuestJITTests {
     @Test
     func onlyEnabledAndSuccessfullyPreparedJITReachesTheBootRequest() {
-        let answers: [Int32] = [KERNARIUM_RUNTIME_JIT_READY, KERNARIUM_RUNTIME_JIT_UNSUPPORTED,
+        let answers: [Int] = [KERNARIUM_RUNTIME_JIT_READY, KERNARIUM_RUNTIME_JIT_UNSUPPORTED,
                                 KERNARIUM_RUNTIME_JIT_NO_DEBUGGER, KERNARIUM_RUNTIME_JIT_FAILED,
                                 KERNARIUM_RUNTIME_JIT_OTHER_SETTINGS, KERNARIUM_RUNTIME_JIT_DISABLED, 99]
         for answer in answers {
