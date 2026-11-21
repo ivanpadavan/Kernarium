@@ -28,6 +28,8 @@ jobs:
         with:
           name: ipa-input-plan
           path: plan.json
+      - name: Verify product selection and cache input boundaries
+        run: python3 -B tests/tooling/kernarium/test_debian_inputs.py -v
   build:
     needs: inputs
     if: needs.inputs.outputs.app == 'true'
@@ -120,6 +122,10 @@ jobs:
           gh release upload "$TAG" "$RUNNER_TEMP/host/debian-app-test-host.tar.gz"
       - name: Clipboard, native selection and terminal resize tests
         run: python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --suite DebianAppTests --output "$RUNNER_TEMP/app-results"
+      - name: Check modifier reset through the application's visible controls
+        run: |
+          rm -f .build/test-host/Products/selected.xctestrun
+          python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --ui-case KernariumUITests/testGraphicalModifiersAreReleasedWhenChangingModes --output "$RUNNER_TEMP/ui-results"
       - name: Fetch a previously boot-qualified Phosh disk without building any image
         run: python3 -B tools/ci/qualified-debian-image.py --output "$RUNNER_TEMP/golden-image"
       - name: Preserve the original real Phosh-to-console persistence smoke
@@ -144,6 +150,7 @@ jobs:
           name: ipa-test-diagnostics
           path: |
             ${{ runner.temp }}/app-results/
+            ${{ runner.temp }}/ui-results/
             ${{ runner.temp }}/persistent-results/
             ${{ runner.temp }}/mobile-results/
             ${{ runner.temp }}/storage-results/
