@@ -48,6 +48,7 @@ struct PersistentDebianTests {
         var nextInput = clock.now
         while clock.now < deadline,
               !output.text.contains("DEBIAN_smoke_OK") {
+            if case .ended = EmulatorLauncher.shared.phase { break }
             if clock.now >= nextInput {
                 let bytes = Array(command.utf8)
                 _ = bytes.withUnsafeBytes {

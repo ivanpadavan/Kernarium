@@ -1,0 +1,242 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Debian guest smoke tests
+'on':
+  workflow_dispatch: {}
+  push:
+    branches:
+    - debian-phosh
+    paths:
+    - .github/workflows/debian-guest-smoke.yml
+    - Kernarium/KernariumTests/PersistentDebianTests.swift
+permissions:
+  contents: write
+concurrency:
+  group: debian-guest-smoke-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  IMAGE_TAG: debian-13-phosh-44935202772-1
+jobs:
+  simulator:
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+    - uses: actions/checkout@v4
+    - name: Select Xcode 27 and install build tools
+      run: |
+        test "$(uname -m)" = arm64
+        XCODE_PATH=$(python3 -c 'import pathlib; p=sorted(pathlib.Path("/Applications").glob("Xcode_27*.app")); print(p[-1] if p else "/Applications/Xcode.app")')
+        sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+        xcodebuild -version
+        xcrun --sdk iphoneos --show-sdk-version | awk -F. '$1 >= 27 { ok=1 } END { exit !ok }'
+        xcodebuild -downloadComponent MetalToolchain
+        brew install cmake ninja make meson pkgconf autoconf automake libtool \
+          gettext gperf groff bison flex rsync
+        echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+        echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+        echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
+        echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+    - name: Install documented Python GPU build tools
+      run: |
+        python3 -m venv .build/gpu-tools-venv
+        .build/gpu-tools-venv/bin/python -m pip install meson Mako PyYAML packaging
+        # The GPU builder intentionally narrows PATH to this tool directory.
+        ln -s "$(brew --prefix bison)/bin/bison" .build/gpu-tools-venv/bin/bison
+        ln -s "$(brew --prefix flex)/bin/flex" .build/gpu-tools-venv/bin/flex
+        echo "$PWD/.build/gpu-tools-venv/bin" >> "$GITHUB_PATH"
+    - name: Reuse the published kernel, boot base and completed Debian image
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |-
+        mkdir -p .build/ci-download .build/kernel/artifacts
+        gh release download debian-44931022698-1 --dir .build/ci-download \
+          --pattern linux-kernel-ci.tar.gz --pattern accepted-aarch64.env --pattern uml-boot-base-aarch64.cpio.gz
+        gh release download "$IMAGE_TAG" --dir .build/ci-download \
+          --pattern debian-13-phosh.img.zip --pattern release-manifest.json
+        tar -C .build/kernel/artifacts -xzf .build/ci-download/linux-kernel-ci.tar.gz
+        CI_KERNEL_DIRECTORY=$(python3 -c 'from pathlib import Path; p=list(Path(".build/kernel/artifacts").glob("*/kernel-artifact.json")); assert len(p)==1; print(p[0].parent.name)')
+        python3 -B kernel/common/artifacts/verify-kernel-artifact.py \
+          --artifact "$PWD/.build/kernel/artifacts/$CI_KERNEL_DIRECTORY" \
+          --common-root "$PWD/kernel/common" --abi-metadata "$PWD/kernel/common/abi/identity.env" \
+          --kernel-metadata "$PWD/kernel/mainline-6.18/patches/metadata.env"
+        echo "UML_MAINLINE_618_KERNEL_ARTIFACT_DIR=$PWD/.build/kernel/artifacts/$CI_KERNEL_DIRECTORY" >> "$GITHUB_ENV"
+        cp .build/ci-download/accepted-aarch64.env tools/rootfs/boot-ramdisk/accepted-aarch64.env
+        . tools/rootfs/boot-ramdisk/accepted-aarch64.env
+        mkdir -p ".build/rootfs/$UML_BOOT_BASE_RELEASE"
+        cp .build/ci-download/uml-boot-base-aarch64.cpio.gz ".build/rootfs/$UML_BOOT_BASE_RELEASE/"
+        python3 -B tools/rootfs/boot-ramdisk/verify_base.py \
+          --descriptor tools/rootfs/boot-ramdisk/accepted-aarch64.env \
+          --archive ".build/rootfs/$UML_BOOT_BASE_RELEASE/uml-boot-base-aarch64.cpio.gz"
+        unzip -q .build/ci-download/debian-13-phosh.img.zip -d .build/ci-download
+        rm .build/ci-download/debian-13-phosh.img.zip
+        python3 - <<'PYTHON'
+        import hashlib, json
+        from pathlib import Path
+        root = Path('.build/ci-download')
+        image = root / 'debian-13-phosh.img'
+        expected = json.loads((root / 'release-manifest.json').read_text())['artifacts'][image.name]
+        with image.open('rb') as source:
+            assert hashlib.file_digest(source, 'sha256').hexdigest() == expected['sha256']
+        assert image.stat().st_size == expected['size']
+        PYTHON
+    - name: Fingerprint the selected Apple build environment
+      id: ios-toolchain
+      run: echo "key=$(tools/ci/apple-toolchain-key.sh)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: ios-sources
+      with:
+        path: |
+          external/sources
+          .build/dependency-cache
+        key: sim-sources-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/**', 'tools/rootfs/vulkan/**', 'scripts/patch_series.py') }}
+        restore-keys: ios-sources-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/**', 'tools/rootfs/vulkan/**', 'scripts/patch_series.py')
+          }}
+    - name: Prepare and verify pinned iOS sources
+      run: |
+        if ! git var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+          git config --global user.name "$(git log -1 --format=%cn)"
+          git config --global user.email "$(git log -1 --format=%ce)"
+        fi
+        for product in apple-gpu-vulkan-experiment ios-network ios-storage ios-compression; do
+          dependencies/prepare.sh --product "$product"
+        done
+        dependencies/prepare.sh --archive-manifest dependencies/llvm/archives.tsv
+    - uses: actions/cache/save@v4
+      if: steps.ios-sources.outputs.cache-hit != 'true'
+      with:
+        path: |
+          external/sources
+          .build/dependency-cache
+        key: ${{ steps.ios-sources.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      id: ios-gpu
+      with:
+        path: .build/dependencies/apple-gpu-vulkan-experiment/ios-simulator-arm64
+        key: sim-gpu-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'tools/rootfs/vulkan/**', 'tools/ci/apple-toolchain-key.sh')
+          }}
+    - name: Build or fully verify iOS gpu dependencies
+      run: dependencies/build-apple-gpu.sh --platform ios-simulator --jobs 3
+    - uses: actions/cache/save@v4
+      if: steps.ios-gpu.outputs.cache-hit != 'true'
+      with:
+        path: .build/dependencies/apple-gpu-vulkan-experiment/ios-simulator-arm64
+        key: ${{ steps.ios-gpu.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      id: ios-network
+      with:
+        path: .build/dependencies/ios-simulator-arm64/network
+        key: sim-network-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh')
+          }}
+    - name: Build or fully verify iOS network dependencies
+      run: dependencies/build-ios-network.sh --platform ios-simulator --jobs 3
+    - uses: actions/cache/save@v4
+      if: steps.ios-network.outputs.cache-hit != 'true'
+      with:
+        path: .build/dependencies/ios-simulator-arm64/network
+        key: ${{ steps.ios-network.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      id: ios-storage
+      with:
+        path: .build/dependencies/ios-storage
+        key: ios-storage-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh')
+          }}
+    - name: Build or fully verify iOS storage dependencies
+      run: dependencies/build-ios-storage.sh
+    - uses: actions/cache/save@v4
+      if: steps.ios-storage.outputs.cache-hit != 'true'
+      with:
+        path: .build/dependencies/ios-storage
+        key: ${{ steps.ios-storage.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      id: ios-compression
+      with:
+        path: .build/dependencies/ios-zstd
+        key: ios-compression-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh')
+          }}
+    - name: Build or fully verify iOS compression dependencies
+      run: dependencies/build-ios-zstd.sh
+    - uses: actions/cache/save@v4
+      if: steps.ios-compression.outputs.cache-hit != 'true'
+      with:
+        path: .build/dependencies/ios-zstd
+        key: ${{ steps.ios-compression.outputs.cache-primary-key }}
+    - name: Build and package only the Linux Simulator runtime
+      run: |
+        cmake --preset kernarium-ios-simulator \
+          -DUML_MAINLINE_618_KERNEL_ARTIFACT_DIR="$UML_MAINLINE_618_KERNEL_ARTIFACT_DIR"
+        cmake --build --preset kernarium-ios-simulator --parallel 3
+        Kernarium/scripts/package-ios-frameworks.sh --sdk simulator --runtimes linux
+        rm -rf .build/dependency-build .build/dependency-cache
+        df -h "$PWD" "$RUNNER_TEMP"
+    - name: Build unsigned tests and stage the persistent disk in an iPad Simulator
+      run: |
+        python3 - <<'PYTHON'
+        import json, subprocess
+        runtimes = json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json']))['runtimes']
+        runtimes = [r for r in runtimes if r['isAvailable'] and '.iOS-' in r['identifier'] and int(r['version'].split('.')[0]) >= 27]
+        if not runtimes:
+            subprocess.run(['xcodebuild','-downloadPlatform','iOS'], check=True)
+            runtimes = json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json']))['runtimes']
+            runtimes = [r for r in runtimes if r['isAvailable'] and '.iOS-' in r['identifier'] and int(r['version'].split('.')[0]) >= 27]
+        assert runtimes, 'iOS 27+ Simulator runtime required'
+        runtime = max(runtimes, key=lambda r: tuple(map(int,r['version'].split('.'))))
+        types = json.loads(subprocess.check_output(['xcrun','simctl','list','devicetypes','--json']))['devicetypes']
+        ipad = next(t for t in reversed(types) if 'iPad' in t['name'])
+        udid = subprocess.check_output(['xcrun','simctl','create','Debian CI',ipad['identifier'],runtime['identifier']],text=True).strip()
+        from pathlib import Path
+        import os
+        with Path(os.environ['GITHUB_ENV']).open('a') as env:
+            env.write(f'SIM_UDID={udid}\n')
+        PYTHON
+    - name: Install the unsigned test host and initial disk
+      run: |-
+        xcrun simctl boot "$SIM_UDID"
+        xcrun simctl bootstatus "$SIM_UDID" -b
+        xcodebuild build-for-testing -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
+          -configuration Release -destination "id=$SIM_UDID" -derivedDataPath "$PWD/.build/simulator-derived" \
+          -jobs 3 -only-testing:KernariumTests/PersistentDebianTests \
+          ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64
+        xcrun simctl install "$SIM_UDID" .build/simulator-derived/Build/Products/Release-iphonesimulator/Kernarium.app
+        CONTAINER=$(xcrun simctl get_app_container "$SIM_UDID" com.imxieyi.Kernarium data)
+        mkdir -p "$CONTAINER/Documents"
+        cp -c .build/ci-download/debian-13-phosh.img "$CONTAINER/Documents/debian-13-phosh.img"
+    - name: Boot Phosh and write data
+      env:
+        TEST_RUNNER_KERNARIUM_ROOTFS: debian-13-phosh.img
+        TEST_RUNNER_KERNARIUM_DEBIAN_SMOKE: write
+        TEST_RUNNER_KERNARIUM_LINUX_CONSOLE_BOOT: '0'
+      run: |
+        xcodebuild test-without-building -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
+          -configuration Release -destination "id=$SIM_UDID" -derivedDataPath "$PWD/.build/simulator-derived" \
+          -only-testing:KernariumTests/PersistentDebianTests -parallel-testing-enabled NO \
+          -resultBundlePath "$RUNNER_TEMP/write.xcresult" \
+          CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64
+    - name: Boot console and verify persistent data
+      env:
+        TEST_RUNNER_KERNARIUM_ROOTFS: debian-13-phosh.img
+        TEST_RUNNER_KERNARIUM_DEBIAN_SMOKE: read
+        TEST_RUNNER_KERNARIUM_LINUX_CONSOLE_BOOT: '1'
+      run: |
+        xcodebuild test-without-building -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
+          -configuration Release -destination "id=$SIM_UDID" -derivedDataPath "$PWD/.build/simulator-derived" \
+          -only-testing:KernariumTests/PersistentDebianTests -parallel-testing-enabled NO \
+          -resultBundlePath "$RUNNER_TEMP/read.xcresult" \
+          CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64
+    - name: Record successful boot checks on the image release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release view "$IMAGE_TAG" --json body --jq .body > "$RUNNER_TEMP/notes.md"
+        printf '\n\nPhosh GUI process, console-mode process absence, write/read persistence and clean shutdown passed in the unsigned iOS Simulator. Hardware Metal/LiveContainer behavior still requires physical-device testing. [Smoke run](%s/%s/actions/runs/%s)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$RUNNER_TEMP/notes.md"
+        gh release edit "$IMAGE_TAG" --notes-file "$RUNNER_TEMP/notes.md"
+    - name: Upload simulator diagnostics
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: debian-simulator-diagnostics
+        path: ${{ runner.temp }}/*.xcresult
+        if-no-files-found: ignore
+    - name: Shut down test Simulator
+      if: always() && env.SIM_UDID != ''
+      run: |-
+        xcrun simctl shutdown "$SIM_UDID" || true
+        xcrun simctl delete "$SIM_UDID" || true
