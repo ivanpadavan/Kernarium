@@ -22,7 +22,7 @@ jobs:
           gh release create "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --target "$GITHUB_SHA" --draft \
             --title "Debian Phosh ${GITHUB_SHA::7}" \
-            --notes "CI build in progress. Rootfs and IPA are published only after build and boot checks pass."
+            --notes "CI build in progress. IPA and rootfs are published after successful packaging; boot/persistence test results follow."
   rootfs:
     needs: release
     runs-on: ubuntu-24.04-arm
@@ -109,21 +109,67 @@ jobs:
             -mountpoint "$RUNNER_TEMP/kernel-volume" -nobrowse
           printf 'UML_KERNEL_SOURCE_DIR=%s/linux\n' "$RUNNER_TEMP/kernel-volume" \
             > kernel/mainline-6.18/source-location.conf
-      - name: Prepare pinned host tools and Linux kernel source
+      - name: Identify kernel producer inputs
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        id: kernel-inputs
+        run: |
+          . kernel/mainline-6.18/patches/metadata.env
+          echo "upstream=$UML_KERNEL_UPSTREAM_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "toolchain=$(tools/ci/apple-toolchain-key.sh)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        id: kernel-host-sources
+        with:
+          path: |
+            external/sources
+            .build/dependency-cache
+          key: kernel-host-sources-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/**', 'scripts/patch_series.py') }}
+      - name: Prepare and verify pinned kernel host-tool sources
         if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
-          # Patch replay preserves its authors and needs a real committer.
-          # Use the triggering commit's existing identity only when the fresh
-          # runner has none configured; no identity is invented or normalized.
           if ! git var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
             git config --global user.name "$(git log -1 --format=%cn)"
             git config --global user.email "$(git log -1 --format=%ce)"
           fi
           dependencies/prepare.sh --product kernel-host-tools
           dependencies/prepare.sh --archive-manifest dependencies/kernel-host-tools/archives.tsv
-          dependencies/build-kernel-host-tools.sh --jobs 3
+      - uses: actions/cache/save@v4
+        if: steps.kernel-cache.outputs.cache-hit != 'true' && steps.kernel-host-sources.outputs.cache-hit != 'true'
+        with:
+          path: |
+            external/sources
+            .build/dependency-cache
+          key: ${{ steps.kernel-host-sources.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        id: kernel-host-tools
+        with:
+          path: .build/dependencies/kernel-host-tools
+          key: kernel-host-tools-v1-${{ runner.arch }}-${{ steps.kernel-inputs.outputs.toolchain }}-${{ hashFiles('dependencies/**', 'kernel/mainline-6.18/build/toolchain/darwin-host/**', 'tools/ci/apple-toolchain-key.sh') }}
+      - name: Build or fully verify kernel host tools
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: dependencies/build-kernel-host-tools.sh --jobs 3
+      - uses: actions/cache/save@v4
+        if: steps.kernel-cache.outputs.cache-hit != 'true' && steps.kernel-host-tools.outputs.cache-hit != 'true'
+        with:
+          path: .build/dependencies/kernel-host-tools
+          key: ${{ steps.kernel-host-tools.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        id: linux-source-download
+        with:
+          path: ${{ runner.temp }}/kernel-volume/cache
+          key: linux-upstream-v1-${{ steps.kernel-inputs.outputs.upstream }}
+      - name: Prepare and verify the pinned Linux source
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
           kernel/mainline-6.18/scripts/prepare-source.sh --slice arm64 \
             --cache "$RUNNER_TEMP/kernel-volume/cache"
+      - uses: actions/cache/save@v4
+        if: steps.kernel-cache.outputs.cache-hit != 'true' && steps.linux-source-download.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/kernel-volume/cache
+          key: ${{ steps.linux-source-download.outputs.cache-primary-key }}
       - name: Build and validate Linux kernel artifact
         if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
@@ -180,6 +226,9 @@ jobs:
         run: |
           python3 -m venv .build/gpu-tools-venv
           .build/gpu-tools-venv/bin/python -m pip install meson Mako PyYAML packaging
+          # The GPU builder intentionally narrows PATH to this tool directory.
+          ln -s "$(brew --prefix bison)/bin/bison" .build/gpu-tools-venv/bin/bison
+          ln -s "$(brew --prefix flex)/bin/flex" .build/gpu-tools-venv/bin/flex
           echo "$PWD/.build/gpu-tools-venv/bin" >> "$GITHUB_PATH"
       - name: Download validated CI inputs
         env:
@@ -196,7 +245,17 @@ jobs:
           python3 -B tools/rootfs/boot-ramdisk/verify_base.py \
             --descriptor tools/rootfs/boot-ramdisk/accepted-aarch64.env \
             --archive ".build/rootfs/$UML_BOOT_BASE_RELEASE/uml-boot-base-aarch64.cpio.gz"
-      - name: Prepare every pinned iOS dependency
+      - name: Fingerprint the selected Apple build environment
+        id: ios-toolchain
+        run: echo "key=$(tools/ci/apple-toolchain-key.sh)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: ios-sources
+        with:
+          path: |
+            external/sources
+            .build/dependency-cache
+          key: ios-sources-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/**', 'tools/rootfs/vulkan/**', 'scripts/patch_series.py') }}
+      - name: Prepare and verify pinned iOS sources
         run: |
           if ! git var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
             git config --global user.name "$(git log -1 --format=%cn)"
@@ -205,10 +264,61 @@ jobs:
           for product in apple-gpu-vulkan-experiment ios-network ios-storage ios-compression; do
             dependencies/prepare.sh --product "$product"
           done
-          dependencies/build-apple-gpu.sh --platform ios --jobs 3
-          dependencies/build-ios-network.sh --platform ios --jobs 3
-          dependencies/build-ios-storage.sh
-          dependencies/build-ios-zstd.sh
+      - uses: actions/cache/save@v4
+        if: steps.ios-sources.outputs.cache-hit != 'true'
+        with:
+          path: |
+            external/sources
+            .build/dependency-cache
+          key: ${{ steps.ios-sources.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        id: ios-gpu
+        with:
+          path: .build/dependencies/apple-gpu-vulkan-experiment/ios-device-arm64
+          key: ios-gpu-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'tools/rootfs/vulkan/**', 'tools/ci/apple-toolchain-key.sh') }}
+      - name: Build or fully verify iOS gpu dependencies
+        run: dependencies/build-apple-gpu.sh --platform ios --jobs 3
+      - uses: actions/cache/save@v4
+        if: steps.ios-gpu.outputs.cache-hit != 'true'
+        with:
+          path: .build/dependencies/apple-gpu-vulkan-experiment/ios-device-arm64
+          key: ${{ steps.ios-gpu.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        id: ios-network
+        with:
+          path: .build/dependencies/ios-device-arm64/network
+          key: ios-network-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh') }}
+      - name: Build or fully verify iOS network dependencies
+        run: dependencies/build-ios-network.sh --platform ios --jobs 3
+      - uses: actions/cache/save@v4
+        if: steps.ios-network.outputs.cache-hit != 'true'
+        with:
+          path: .build/dependencies/ios-device-arm64/network
+          key: ${{ steps.ios-network.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        id: ios-storage
+        with:
+          path: .build/dependencies/ios-storage
+          key: ios-storage-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh') }}
+      - name: Build or fully verify iOS storage dependencies
+        run: dependencies/build-ios-storage.sh
+      - uses: actions/cache/save@v4
+        if: steps.ios-storage.outputs.cache-hit != 'true'
+        with:
+          path: .build/dependencies/ios-storage
+          key: ${{ steps.ios-storage.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        id: ios-compression
+        with:
+          path: .build/dependencies/ios-zstd
+          key: ios-compression-v1-${{ runner.arch }}-${{ steps.ios-toolchain.outputs.key }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh') }}
+      - name: Build or fully verify iOS compression dependencies
+        run: dependencies/build-ios-zstd.sh
+      - uses: actions/cache/save@v4
+        if: steps.ios-compression.outputs.cache-hit != 'true'
+        with:
+          path: .build/dependencies/ios-zstd
+          key: ${{ steps.ios-compression.outputs.cache-primary-key }}
       - name: Build Linux runtime and package frameworks
         run: |
           cmake --preset kernarium-ios-device
@@ -220,11 +330,6 @@ jobs:
           rm -rf .build/dependency-build .build/dependency-cache
           df -h "$PWD" "$RUNNER_TEMP"
           du -sh .build external/sources
-      - name: Check host boot contracts
-        run: |
-          cmake --preset macos-unit
-          cmake --build --preset unit-test-binaries --parallel 3
-          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium-(loader-|settle-plumbing|console-)|kernarium-device-framework-|boot-initramfs|rootfs-boot-base|rootfs-starter|andarium-stage-system-image'
       - name: Build unsigned iPhone application
         run: |
           xcodebuild -resolvePackageDependencies -project Kernarium/Kernarium.xcodeproj -scheme Kernarium
@@ -235,6 +340,38 @@ jobs:
           mkdir -p .build/ipa/Payload
           cp -R .build/iphone-derived/Build/Products/Release-iphoneos/Kernarium.app .build/ipa/Payload/
           (cd .build/ipa && zip -qry ../Kernarium-Debian.ipa Payload)
+      - name: Publish built IPA and rootfs before smoke tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -c 'from pathlib import Path; assert Path(".build/Kernarium-Debian.ipa").stat().st_size < 2**31, "IPA exceeds 2 GiB"'
+          gh release upload "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" .build/Kernarium-Debian.ipa --clobber
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          root = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+          commit = os.environ["GITHUB_SHA"]
+          guide = (
+              "Unsigned Kernarium IPA for SideStore; current upstream requires iOS 27+ and Metal 4.\n\n"
+              "Unzip debian-13-phosh.img.zip in Files and place debian-13-phosh.img in Kernarium Documents. "
+              "The disk persists; replacing it replaces its guest data. The Start graphical desktop setting "
+              "selects Phosh or the console for the next launch. Local user debian has passwordless sudo; "
+              "use sudo passwd debian before using the lock screen. SSH accepts owner-installed public keys.\n\n"
+              f"[Installation and storage guide]({root}/blob/{commit}/Kernarium/README.md)\n\n"
+              f"[CI run]({root}/actions/runs/{os.environ['GITHUB_RUN_ID']}) | [Sources]({root}/tree/{commit})\n"
+          )
+          Path(".build/release-guide.md").write_text(guide)
+          Path(".build/release-notes.md").write_text(
+              "Build and packaging succeeded. Boot and persistence smoke tests are still running; "
+              "this release will be updated with their results. Physical iPhone and LiveContainer behavior "
+              "is unverified.\n\n" + guide)
+          PYTHON
+          gh release edit "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --draft=false --prerelease --notes-file .build/release-notes.md
+      - name: Check host boot contracts
+        run: |
+          cmake --preset macos-unit
+          cmake --build --preset unit-test-binaries --parallel 3
+          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium-(loader-|settle-plumbing|console-)|kernarium-device-framework-|boot-initramfs|rootfs-boot-base|rootfs-starter|andarium-stage-system-image'
       - name: Bootstrap app container on the Mac
         run: |
           xcodebuild -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
@@ -272,11 +409,18 @@ jobs:
             --only-testing KernariumTests/PersistentDebianTests \
             --test-env KERNARIUM_DEBIAN_SMOKE=read \
             --test-env KERNARIUM_LINUX_CONSOLE_BOOT=1
-      - name: Publish IPA and successful release
+      - name: Mark boot and persistence tests passed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 -c 'from pathlib import Path; assert Path(".build/Kernarium-Debian.ipa").stat().st_size < 2**31, "IPA exceeds 2 GiB"'
-          gh release upload "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" .build/Kernarium-Debian.ipa --clobber
-          gh release edit "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --draft=false --prerelease \
-            --notes "Unsigned Kernarium IPA for SideStore; iOS 27+ and Metal 4 required by current upstream. Debian 13 ARM64 Phosh disk is delivered as .img.zip: unzip in Files and place debian-13-phosh.img in Kernarium Documents. Start graphical desktop selects Phosh or the console for the next launch. The disk persists; replacing it erases its guest data. CI passed build, graphical boot, console boot, clean shutdown and data persistence checks on an Apple silicon Mac using the iOS runtime. No physical iPhone or LiveContainer validation has been performed. Local console user debian has passwordless sudo; run sudo passwd debian before using a lock screen. SSH permits only owner-installed public keys. Sources: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+          python3 -c 'from pathlib import Path; p=Path(".build"); (p/"release-notes.md").write_text("Build and both boot/persistence smoke tests passed on the iOS runtime on an Apple silicon Mac. Physical iPhone and LiveContainer behavior is unverified.\n\n" + (p/"release-guide.md").read_text())'
+          gh release edit "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --notes-file .build/release-notes.md
+      - name: Report a failed check on an already published build
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f .build/release-guide.md ] && [ "$(gh release view "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --json isDraft --jq .isDraft)" = false ]; then
+            python3 -c 'from pathlib import Path; p=Path(".build"); (p/"release-notes.md").write_text("Build succeeded, but a subsequent CI check or boot/persistence smoke test failed. This is an experimental build; see the linked run for the failure. Physical iPhone and LiveContainer behavior is unverified.\n\n" + (p/"release-guide.md").read_text())'
+            gh release edit "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --notes-file .build/release-notes.md
+          fi

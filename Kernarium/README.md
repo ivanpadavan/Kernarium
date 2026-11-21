@@ -155,6 +155,12 @@ preparation, kernel compilation, rootfs production and app compilation happen
 on GitHub runners. Successful rootfs and kernel outputs are cached by their
 producer-source hashes; every use revalidates the boot base and kernel, and
 the app lane checks the raw disk against its release manifest before booting.
+iOS dependency prefixes are saved immediately after each successful product,
+so a later failure keeps completed GPU, network, storage and compression work.
+Their keys include pinned sources and recipes, architecture, actual Xcode,
+SDKs, compilers and host tools; canonical builders revalidate restored prefixes.
+Verified source/download trees are cached separately. No signing material is
+cached.
 The native ARM64 Linux job produces Debian and a new boot base, audited by the
 existing complete base verifier before acceptance. A
 separate macOS job produces the validated Linux kernel artifact; the iOS
@@ -176,8 +182,10 @@ CI starts the actual iOS device runtime on an Apple silicon Mac in Designed
 for iPad mode. Its opt-in `PersistentDebianTests` first waits for Phosh and
 Phoc, writes a marker and powers off, then boots the same disk in console
 mode, verifies the marker and absence of the desktop processes, and powers
-off again. Only a successful build and both boots publish the release; failed
-runs retain a draft for diagnosis. This does not validate installation,
+off again. Successful IPA packaging publishes the IPA and rootfs before the
+smoke tests, with a notice that testing is still running. Both successful and
+failed checks update that published release; a failure before packaging leaves
+only a draft. This does not validate installation,
 memory limits, JIT or LiveContainer behavior on a physical iPhone.
 
 ## Automation runs
