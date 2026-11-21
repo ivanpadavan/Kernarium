@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [debian-phosh]
+    paths-ignore:
+      - tools/rootfs/starter/**
+      - .github/workflows/debian-phosh-image.yml
 permissions:
   contents: write
 concurrency:

@@ -503,6 +503,23 @@ debootstrap_root()
 		"$DEBIAN_SUITE" "$root" http://deb.debian.org/debian
 }
 
+
+# Kernarium's fd-backed UML console is ttyS0; CLI hosts may expose hvc0.
+# tty1 remains usable in console mode. A display manager owns it in GUI mode.
+configure_debian_local_console()
+{
+	root=$1
+	user=$2
+	for unit in serial-getty@ttyS0 serial-getty@hvc0 getty@tty1; do
+		write_root_file "$root/etc/systemd/system/$unit.service.d/autologin.conf" 0644 <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $user --noclear %I \$TERM
+EOF
+		as_root systemctl --root="$root" enable "$unit.service"
+	done
+}
+
 build_debian_minimal()
 {
 	printf '%s\n' "==> Building Debian 13 minimal GPT image"
@@ -512,6 +529,7 @@ build_debian_minimal()
 	prepare_debian_base "$root"
 	install_debian_base "$root"
 	configure_debian_base "$root" debian root
+	configure_debian_local_console "$root" root
 	as_root chroot "$root" /usr/bin/passwd -d root
 	as_root systemctl --root="$root" set-default multi-user.target
 	as_root chroot "$root" dpkg-query -W -f='${binary:Package}\t${Version}\n' | \
@@ -540,15 +558,20 @@ build_debian_phosh()
 	as_root chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
 		apt-get install -y --no-install-recommends \
 		phosh phoc greetd foot dbus-user-session libpam-systemd \
+		gnome-session-bin gnome-session-common gnome-settings-daemon \
+		gnome-settings-daemon-common squeekboard \
 		libgl1-mesa-dri libegl-mesa0 sudo openssh-server procps
 	as_root test -x "$root/usr/bin/phosh-session"
 	as_root test -x "$root/usr/sbin/agreety"
 	as_root chroot "$root" useradd --create-home --uid 1000 --shell /bin/bash debian
+	# Unlock local initial-session/account checks without publishing a password.
+	as_root chroot "$root" passwd -d debian
 	for group in video render input audio; do
 		as_root chroot "$root" groupadd --force "$group"
 		as_root chroot "$root" usermod --append --groups "$group" debian
 	done
 	configure_debian_base "$root" debian debian
+	configure_debian_local_console "$root" debian
 	write_root_file "$root/etc/sudoers.d/debian" 0440 <<'EOF'
 debian ALL=(ALL:ALL) NOPASSWD: ALL
 EOF
@@ -556,6 +579,8 @@ EOF
 	# autologin is the setup path; SSH accepts keys installed by the owner.
 	write_root_file "$root/etc/ssh/sshd_config.d/10-kernarium.conf" 0644 <<'EOF'
 PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
 PermitRootLogin prohibit-password
 EOF
 	as_root rm -f "$root/etc/ssh/ssh_host_"*
@@ -580,6 +605,11 @@ user = "_greetd"
 command = "/usr/bin/phosh-session"
 user = "debian"
 EOF
+	write_root_file "$root/etc/systemd/system/greetd.service.d/console.conf" 0644 <<'EOF'
+[Unit]
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+EOF
 	# Debian's package may enable greetd through a display-manager alias.
 	# Keep one explicit graphical dependency and none in multi-user.target.
 	as_root systemctl --root="$root" disable greetd.service || true
@@ -590,6 +620,9 @@ EOF
 		"$root/etc/systemd/system/graphical.target.wants/greetd.service"
 	as_root systemctl --root="$root" enable ssh-host-keys.service ssh.service
 	as_root systemctl --root="$root" set-default graphical.target
+	as_root python3 "$SCRIPT_DIR/verify-phosh.py" --root "$root" \
+		--output "$output_dir/debian-13-phosh.audit.json"
+	as_root chroot "$root" runuser -u debian -- /bin/sh -ec 'test "$(id -u)" = 1000; sudo -n true'
 	as_root chroot "$root" dpkg-query -W -f='${binary:Package}\t${Version}\n' | \
 		sort > "$work_dir/debian-phosh.packages.tsv"
 	unmount_chroot_proc
