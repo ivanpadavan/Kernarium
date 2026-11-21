@@ -5,6 +5,7 @@
 import argparse
 import csv
 import fnmatch
+import functools
 import hashlib
 import io
 import json
@@ -70,6 +71,7 @@ class Repository:
         self.paths = subprocess.check_output(
             ['git', 'ls-tree', '-r', '--name-only', ref], text=True).splitlines()
 
+    @functools.cache
     def read(self, path):
         return subprocess.check_output(['git', 'show', f'{self.ref}:{path}'])
 
@@ -129,8 +131,12 @@ class Repository:
             entries['llvm-archives'] = self.read('dependencies/llvm/archives.tsv')
         return hash_entries(entries)
 
-    def identities(self):
-        identities = {name: self.fingerprint(patterns) for name, patterns in GROUPS.items()}
+    def identity(self, name):
+        if name in ('phosh', 'minimal'):
+            return hash_entries({group: self.fingerprint(GROUPS[group]).encode()
+                                 for group in ('debian-base', name, 'image-tools')})
+        if name != 'boot-base':
+            return self.fingerprint(GROUPS[name])
         # Debian product dispatch and package recipes do not build the boot
         # archive. Keep its existing recipe identity across product splits.
         driver = self.read('tools/rootfs/starter/build-all.sh')
@@ -142,14 +148,13 @@ class Repository:
             boot_inputs[name] = function.group()
         boot_inputs['pins'] = b'\n'.join(line for line in driver.splitlines()
                                        if line.startswith((b'BUILDROOT_', b'BUSYBOX_')))
-        identities['boot-base'] = hash_entries(boot_inputs)
+        return hash_entries(boot_inputs)
+
+    def identities(self):
+        identities = {name: self.identity(name) for name in GROUPS}
         for name in DEPENDENCIES:
             for platform in ('ios', 'ios-simulator'):
                 identities[f'{name}-{platform}'] = self.dependency(name, platform)
-        identities['phosh'] = hash_entries({name: identities[name].encode()
-            for name in ('debian-base', 'phosh', 'image-tools')})
-        identities['minimal'] = hash_entries({name: identities[name].encode()
-            for name in ('debian-base', 'minimal', 'image-tools')})
         return identities
 
 
@@ -184,8 +189,8 @@ def main():
     if arguments.component:
         if arguments.component.startswith('sources-'):
             print(repository.sources(arguments.component.removeprefix('sources-')))
-        elif arguments.component in GROUPS and arguments.component not in ('boot-base', 'phosh', 'minimal'):
-            print(repository.fingerprint(GROUPS[arguments.component]))
+        elif arguments.component in GROUPS:
+            print(repository.identity(arguments.component))
         else:
             print(repository.identities()[arguments.component])
         return
