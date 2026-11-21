@@ -29,7 +29,13 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: rootfs-cache
+        with:
+          path: ${{ runner.temp }}/starter-release
+          key: debian-phosh-zip-v1-${{ hashFiles('tools/rootfs/**', 'tools/ci/accept-boot-base.py') }}
       - name: Install native ARM64 rootfs build tools
+        if: steps.rootfs-cache.outputs.cache-hit != 'true'
         run: |
           test "$(uname -m)" = aarch64
           sudo apt-get update
@@ -38,11 +44,13 @@ jobs:
             gzip libncurses-dev patch perl python3 rsync sudo tar unzip wget \
             file git zip
       - name: Build Debian Phosh and its boot base
+        if: steps.rootfs-cache.outputs.cache-hit != 'true'
         run: |
           tools/rootfs/starter/build-all.sh \
             --work "$RUNNER_TEMP/starter-work" --output "$RUNNER_TEMP/starter-release" \
             --jobs 4 --product boot-base-aarch64 --product debian-13-phosh
       - name: Audit and accept this run's boot base
+        if: steps.rootfs-cache.outputs.cache-hit != 'true'
         run: |
           python3 -B tools/ci/accept-boot-base.py \
             --archive "$RUNNER_TEMP/starter-release/uml-boot-base-aarch64.cpio.gz" \
@@ -53,6 +61,12 @@ jobs:
             "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
           rm "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
           python3 -c 'from pathlib import Path; import sys; files=list(Path(sys.argv[1]).iterdir()); assert all(p.stat().st_size < 2**31 for p in files), "Release asset exceeds 2 GiB"' "$RUNNER_TEMP/starter-release"
+      - name: Revalidate rootfs delivery inputs
+        run: |
+          python3 -B tools/rootfs/boot-ramdisk/verify_base.py \
+            --descriptor "$RUNNER_TEMP/starter-release/accepted-aarch64.env" \
+            --archive "$RUNNER_TEMP/starter-release/uml-boot-base-aarch64.cpio.gz"
+          python3 -c 'from pathlib import Path; import sys; assert all(p.stat().st_size < 2**31 for p in Path(sys.argv[1]).iterdir()), "Release asset exceeds 2 GiB"' "$RUNNER_TEMP/starter-release"
       - name: Upload rootfs assets to the draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,7 +79,13 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: kernel-cache
+        with:
+          path: ${{ runner.temp }}/linux-kernel.tar.gz
+          key: linux-kernel-v1-${{ hashFiles('kernel/**', 'dependencies/**', 'scripts/**') }}
       - name: Install kernel producer host tools
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
           test "$(uname -m)" = arm64
           brew install cmake ninja make meson pkgconf autoconf automake libtool \
@@ -78,6 +98,7 @@ jobs:
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
           echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - name: Prepare isolated case-sensitive kernel filesystem
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
           hdiutil create -size 24g -type SPARSE -fs HFSX \
             -volname KernariumKernel "$RUNNER_TEMP/kernel.sparseimage"
@@ -89,13 +110,22 @@ jobs:
           printf 'UML_KERNEL_SOURCE_DIR=%s/linux\n' "$RUNNER_TEMP/kernel-volume" \
             > kernel/mainline-6.18/source-location.conf
       - name: Prepare pinned host tools and Linux kernel source
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
+          # Patch replay preserves its authors and needs a real committer.
+          # Use the triggering commit's existing identity only when the fresh
+          # runner has none configured; no identity is invented or normalized.
+          if ! git var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+            git config --global user.name "$(git log -1 --format=%cn)"
+            git config --global user.email "$(git log -1 --format=%ce)"
+          fi
           dependencies/prepare.sh --product kernel-host-tools
           dependencies/prepare.sh --archive-manifest dependencies/kernel-host-tools/archives.tsv
           dependencies/build-kernel-host-tools.sh --jobs 3
           kernel/mainline-6.18/scripts/prepare-source.sh --slice arm64 \
             --cache "$RUNNER_TEMP/kernel-volume/cache"
       - name: Build and validate Linux kernel artifact
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
           kernel/mainline-6.18/build/build-kernel.sh --product linux --slice arm64 \
             --build "$RUNNER_TEMP/kernel-volume/build" --jobs 3
@@ -108,10 +138,18 @@ jobs:
             --objcopy "$(brew --prefix llvm)/bin/llvm-objcopy"
           tar -C .build/kernel/artifacts -czf "$RUNNER_TEMP/linux-kernel.tar.gz" \
             "$UML_KERNEL_ARTIFACT_DIRECTORY_NAME"
-      - name: Check compressed kernel asset size
+      - name: Revalidate the kernel artifact and compressed asset size
         run: |
+          mkdir -p .build/kernel/artifacts
+          tar -C .build/kernel/artifacts -xzf "$RUNNER_TEMP/linux-kernel.tar.gz"
+          . kernel/mainline-6.18/artifacts/accepted-4k.env
+          python3 -B kernel/common/artifacts/verify-kernel-artifact.py \
+            --artifact "$PWD/.build/kernel/artifacts/$UML_KERNEL_ARTIFACT_DIRECTORY_NAME" \
+            --common-root "$PWD/kernel/common" \
+            --abi-metadata "$PWD/kernel/common/abi/identity.env" \
+            --kernel-metadata "$PWD/kernel/mainline-6.18/patches/metadata.env"
           python3 -c 'from pathlib import Path; import sys; assert Path(sys.argv[1]).stat().st_size < 2**31, "Kernel asset exceeds 2 GiB"' "$RUNNER_TEMP/linux-kernel.tar.gz"
-          df -h "$PWD" "$RUNNER_TEMP/kernel-volume"
+          df -h "$PWD" "$RUNNER_TEMP"
       - name: Upload validated kernel artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -155,6 +193,10 @@ jobs:
             --archive ".build/rootfs/$UML_BOOT_BASE_RELEASE/uml-boot-base-aarch64.cpio.gz"
       - name: Prepare every pinned iOS dependency
         run: |
+          if ! git var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+            git config --global user.name "$(git log -1 --format=%cn)"
+            git config --global user.email "$(git log -1 --format=%ce)"
+          fi
           for product in apple-gpu-vulkan-experiment ios-network ios-storage ios-compression; do
             dependencies/prepare.sh --product "$product"
           done
@@ -202,6 +244,16 @@ jobs:
         run: |
           unzip -q .build/ci-download/debian-13-phosh.img.zip -d .build/ci-download
           rm .build/ci-download/debian-13-phosh.img.zip
+          python3 - <<'PYTHON'
+          import hashlib, json
+          from pathlib import Path
+          root = Path(".build/ci-download")
+          image = root / "debian-13-phosh.img"
+          expected = json.loads((root / "release-manifest.json").read_text())["artifacts"][image.name]
+          with image.open("rb") as source:
+              actual = hashlib.file_digest(source, "sha256").hexdigest()
+          assert image.stat().st_size == expected["size"] and actual == expected["sha256"]
+          PYTHON
           df -h "$PWD"
           Kernarium/scripts/run-ios-mac.sh --no-build --ad-hoc \
             --rootfs "$PWD/.build/ci-download/debian-13-phosh.img" \

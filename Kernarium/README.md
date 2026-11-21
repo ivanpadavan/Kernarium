@@ -152,8 +152,11 @@ unified `rootfs.erofs` carries none of it and boots to its own defaults.
 [Debian Phosh for iPhone](../.github/workflows/debian-phosh.yml) runs on pushes
 to `debian-phosh` and by manual dispatch. All dependency installation, source
 preparation, kernel compilation, rootfs production and app compilation happen
-on GitHub runners. The native ARM64 Linux job produces Debian and a new boot
-base, audited by the existing complete base verifier before acceptance. A
+on GitHub runners. Successful rootfs and kernel outputs are cached by their
+producer-source hashes; every use revalidates the boot base and kernel, and
+the app lane checks the raw disk against its release manifest before booting.
+The native ARM64 Linux job produces Debian and a new boot base, audited by the
+existing complete base verifier before acceptance. A
 separate macOS job produces the validated Linux kernel artifact; the iOS
 build consumes that artifact and never invokes Kbuild. No Android image or
 Android kernel is built.

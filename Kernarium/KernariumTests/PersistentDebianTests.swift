@@ -8,7 +8,7 @@ import Testing
 /// runtime or rootfs payload changes the guest's boot policy.
 @MainActor
 struct PersistentDebianTests {
-    private static var requested: Bool {
+    private nonisolated static var requested: Bool {
         ["write", "read"].contains(
             ProcessInfo.processInfo.environment["KERNARIUM_DEBIAN_SMOKE"] ?? ""
         )
@@ -43,18 +43,19 @@ struct PersistentDebianTests {
         // for a retry while the desktop is still coming up.
         let command = "if " + check + "; then sync; " +
             "printf 'DEBIAN_%s_OK\\n' smoke; sudo systemctl poweroff; fi\n"
-        let deadline = ContinuousClock.now.advanced(by: .seconds(900))
-        var nextInput = ContinuousClock.now
-        while ContinuousClock.now < deadline,
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(900))
+        var nextInput = clock.now
+        while clock.now < deadline,
               !output.text.contains("DEBIAN_smoke_OK") {
-            if ContinuousClock.now >= nextInput {
+            if clock.now >= nextInput {
                 let bytes = Array(command.utf8)
                 _ = bytes.withUnsafeBytes {
                     kernarium_runtime_loader_send_console_input(
                         $0.baseAddress, $0.count
                     )
                 }
-                nextInput = ContinuousClock.now.advanced(by: .seconds(15))
+                nextInput = clock.now.advanced(by: .seconds(15))
             }
             try await Task.sleep(for: .seconds(1))
         }
