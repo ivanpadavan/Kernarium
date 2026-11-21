@@ -181,15 +181,16 @@ repositories and user files. The desktop and the serial console log in as
 before using the Phosh lock screen. SSH accepts only public keys the owner
 installs; each guest generates its own host keys on first boot.
 
-CI starts the actual iOS device runtime on an Apple silicon Mac in Designed
-for iPad mode. Its opt-in `PersistentDebianTests` first waits for Phosh and
-Phoc, writes a marker and powers off, then boots the same disk in console
-mode, verifies the marker and absence of the desktop processes, and powers
-off again. Successful IPA packaging publishes the IPA and rootfs before the
-smoke tests, with a notice that testing is still running. Both successful and
-failed checks update that published release; a failure before packaging leaves
-only a draft. This does not validate installation,
-memory limits, JIT or LiveContainer behavior on a physical iPhone.
+The [Debian guest smoke workflow](../.github/workflows/debian-guest-smoke.yml)
+reuses the published kernel, boot base and Phosh disk and runs the actual
+Linux runtime in an unsigned iOS Simulator on an Apple silicon Mac. Its opt-in
+`PersistentDebianTests` checks local serial login, waits for Phosh and Phoc,
+writes a marker and powers off, then boots the same disk in console mode,
+verifies the marker and absence of the desktop processes, and powers off
+again. Each launch must report one passing test and no skipped tests before
+CI records success on the image release. This does not validate installation,
+hardware Metal, memory limits, JIT or LiveContainer behavior on a physical
+iPhone.
 
 ## Automation runs
 
