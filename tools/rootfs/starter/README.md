@@ -23,7 +23,18 @@ the serial console with no desktop processes. Both modes use the same writable
 root and the `debian` account with passwordless sudo. Password authentication
 for SSH is disabled and host keys are generated inside the guest on its first
 boot. Install your own authorized public key from the local console to use SSH.
-Set a personal password with `sudo passwd debian` for the desktop lock screen.
+The local account is unlocked without an initial shared password; `ttyS0`
+(Kernarium), `hvc0` (Virtio-console hosts), and `tty1` auto-login as `debian`.
+greetd owns `tty1` during graphical boot and conflicts with its getty. Set a
+personal password with `sudo passwd debian` for the desktop lock screen.
+The producer explicitly installs GNOME session/settings components and
+Squeekboard and audits every required session desktop entry and executable.
+
+The minimal Debian product also auto-logs in on these three consoles, as root,
+with no initial password. It contains no Phosh or SSH server. Set a personal
+password with `passwd root` from the local console. The image-only CI workflow
+builds Phosh and minimal independently without rebuilding the kernel, IPA or
+boot base, and publishes each completed disk before guest boot tests.
 
 `debian-13-minimal-armhf.img` is the opt-in 32-bit Arm twin of the minimal
 Debian image for AArch32 guests (see below).

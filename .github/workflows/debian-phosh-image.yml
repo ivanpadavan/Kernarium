@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Debian image update
+on:
+  workflow_dispatch:
+  push:
+    branches: [debian-phosh]
+    paths:
+      - tools/rootfs/starter/**
+      - .github/workflows/debian-phosh-image.yml
+permissions:
+  contents: write
+concurrency:
+  group: debian-image-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  image:
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [debian-13-phosh, debian-13-minimal]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create independent draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCT: ${{ matrix.product }}
+        run: |
+          echo "TAG=${PRODUCT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          gh release create "${PRODUCT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --target "$GITHUB_SHA" --draft --title "$PRODUCT image update" \
+            --notes "Image build running. Existing IPA/kernel remain compatible. Boot tests pending."
+      - uses: actions/cache/restore@v4
+        id: image-cache
+        with:
+          path: ${{ runner.temp }}/image-release
+          key: starter-image-v1-${{ matrix.product }}-${{ runner.arch }}-${{ hashFiles('tools/rootfs/starter/**', 'tools/rootfs/producer.sh') }}
+      - name: Install native image producer prerequisites
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        run: |
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cpio curl debootstrap e2fsprogs gdisk gzip python3 sudo tar zip unzip
+      - name: Build only the selected Debian disk
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        env:
+          PRODUCT: ${{ matrix.product }}
+        run: |
+          tools/rootfs/starter/build-all.sh --work "$RUNNER_TEMP/image-work" \
+            --output "$RUNNER_TEMP/image-release" --product "$PRODUCT"
+          python3 -B tools/rootfs/starter/gpt.py "$RUNNER_TEMP/image-release/$PRODUCT.img"
+          zip -9 -j "$RUNNER_TEMP/image-release/$PRODUCT.img.zip" "$RUNNER_TEMP/image-release/$PRODUCT.img"
+          unzip -t "$RUNNER_TEMP/image-release/$PRODUCT.img.zip"
+          rm "$RUNNER_TEMP/image-release/$PRODUCT.img"
+      - uses: actions/cache/save@v4
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/image-release
+          key: ${{ steps.image-cache.outputs.cache-primary-key }}
+      - name: Verify delivery and upload the completed ZIP to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCT: ${{ matrix.product }}
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib, json, os, zipfile
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'image-release'
+          name = os.environ['PRODUCT'] + '.img'
+          expected = json.loads((root / 'release-manifest.json').read_text())['artifacts'][name]
+          with zipfile.ZipFile(root / (name + '.zip')) as archive:
+              assert archive.namelist() == [name]
+              assert archive.getinfo(name).file_size == expected['size']
+              with archive.open(name) as image:
+                  assert hashlib.file_digest(image, 'sha256').hexdigest() == expected['sha256']
+          assert all(p.stat().st_size < 2**31 for p in root.iterdir())
+          PYTHON
+          gh release upload "$TAG" "$RUNNER_TEMP/image-release/"* --clobber
+          gh release view "$TAG" --json url,assets --jq '{url,assets:[.assets[]|{name,size,state,url}]}'
+      - name: Publish this image without waiting for the other product or boot tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCT: ${{ matrix.product }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          product = os.environ['PRODUCT']
+          graphical = product == 'debian-13-phosh'
+          account = 'debian' if graphical else 'root'
+          notes = (
+              'Image build, GPT/ZIP integrity and package checks passed. Guest boot/GUI/persistence tests are pending.\n\n'
+              'Use the existing compatible [Kernarium-Debian.ipa](https://github.com/ivanpadavan/Kernarium/releases/download/debian-44931022698-1/Kernarium-Debian.ipa); '
+              'no kernel, IPA or boot-base rebuild was needed.\n\n'
+              f'Unzip {product}.img.zip and import {product}.img into Kernarium Documents, then select it under Storage / Root filesystem. '
+              'Keep a backup of any existing disk: replacing a disk replaces its guest data. '
+              + ('Enable graphical boot for Phosh, or disable it for a console. ' if graphical else 'Disable graphical boot for this console-only image. ')
+              + f'Local consoles ttyS0, hvc0 and tty1 automatically log in as {account}; there is no initial/shared password. '
+              f'Set your personal password with {"sudo " if graphical else ""}passwd {account}. '
+              + ('SSH only accepts public keys installed by the owner. ' if graphical else 'This minimal image does not install an SSH server. ')
+              + f'\n\n[CI run]({os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]})\n'
+          )
+          Path(os.environ['RUNNER_TEMP'], 'image-notes.md').write_text(notes)
+          PYTHON
+          gh release edit "$TAG" --draft=false --prerelease --notes-file "$RUNNER_TEMP/image-notes.md"
