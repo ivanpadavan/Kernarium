@@ -13,7 +13,8 @@
  *
  * There are two routes to JIT memory. On macOS a mapping made for JIT is written
  * inside the calling thread's write window. On an iOS device that is not an
- * App Store build, a debugger prepares one region for the process once, and
+ * App Store build, one region is prepared using the process's existing JIT
+ * permission or a debugger, and
  * the memory is written through a second, writable mapping of the same pages
  * (writable_alias) with no write window. The second route does not exist in
  * the App Store build, which does not compile or link it.
@@ -78,15 +79,14 @@ void release_guarded(void *data, std::size_t size);
 
 /* How an iOS device gets its JIT memory. The App Store build has none of it. */
 enum class RegionStatus : std::uint8_t {
-	/* The region is mapped, a debugger blessed it, the process detached from
-	 * it and code written through the alias ran from the executable mapping.
+	/* The region is mapped, executable permission was verified, and code
+	 * written through the alias ran from the executable mapping.
 	 * It stays so for the life of the process. */
 	ready,
 	/* This product has no such route: macOS, the Simulator, an App Store build.
 	 */
 	unsupported,
-	/* No debugger is attached to the process (P_TRACED is clear), so no
-	 * request is made. */
+	/* Neither existing JIT permission nor an attached debugger is available. */
 	no_debugger,
 	/* The region could not be mapped, the debugger did not bless it in time,
 	 * the pages could not be wired, or code did not run from them. */
@@ -104,9 +104,9 @@ enum class RegionStatus : std::uint8_t {
 
 /* Prepares, once per process, one region of at least `bytes` for JIT memory.
  * It maps the region read-execute near this image and below 1 TiB, makes its
- * writable alias, asks the debugger to bless each of its pages, tells the
- * debugger to detach, wires the pages, and checks that code written through
- * the alias runs. A debugger that does not answer within a bound fails the
+ * writable alias, uses existing JIT permission or asks a debugger to bless
+ * each page and detach, wires the pages, and checks executable permission.
+ * Without a live debugger every granule is checked. A debugger that does not answer within a bound fails the
  * call. A later call with no more bytes than the region holds returns ready
  * at once; one with more returns smaller. It blocks for the seconds the
  * debugger takes, so call it from a worker thread, and never from a thread

@@ -18,6 +18,9 @@ void send_real_requests(bool send) noexcept;
  * (nullptr) reads as attached. */
 void set_traced_probe(bool (*probe)() noexcept) noexcept;
 
+/* Code-signing flags for the host-only region variant; initially zero. */
+void set_code_signing_flags(std::uint32_t flags) noexcept;
+
 /* One request through the production path, with the command in x16: 0
  * answered, 1 no debugger, 2 timed out, 3 unanswered while a debugger is still
  * attached. */

@@ -15,7 +15,7 @@ nonisolated struct GuestJITChoice: Equatable, Sendable {
         if !enabled { return "CPU engine: Gadgets (JIT is off)" }
         switch answer {
         case KERNARIUM_RUNTIME_JIT_NO_DEBUGGER:
-            return "CPU engine: Gadgets (JIT needs a servicing debugger)"
+            return "CPU engine: Gadgets (JIT permission is unavailable)"
         case KERNARIUM_RUNTIME_JIT_OTHER_SETTINGS:
             return "CPU engine: Gadgets (reopen the app to prepare JIT for the new CPU or RAM settings)"
         case KERNARIUM_RUNTIME_JIT_UNSUPPORTED:

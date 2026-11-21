@@ -177,6 +177,7 @@ def plan(before, after):
     images = [name for name in ('phosh', 'minimal')
               if name in changed or 'image-ci' in changed or kernel or boot_base]
     return dict(app=app, kernel=kernel, boot_base=boot_base, images=images,
+                runtime_tests='runtime' in changed,
                 base=bool(images), changed=sorted(changed), identities=after)
 
 
@@ -206,7 +207,7 @@ def main():
         arguments.output.write_text(encoded + '\n')
     if arguments.github_output:
         with arguments.github_output.open('a') as output:
-            for key in ('app', 'kernel', 'boot_base', 'base'):
+            for key in ('app', 'kernel', 'boot_base', 'base', 'runtime_tests'):
                 output.write(f'{key}={str(result[key]).lower()}\n')
             output.write('images=' + json.dumps(result['images']) + '\n')
             for key, identity in after.items():
