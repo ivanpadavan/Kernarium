@@ -168,22 +168,54 @@ jobs:
         rm -rf .build/dependency-build .build/dependency-cache
         df -h "$PWD" "$RUNNER_TEMP"
     - name: Build unsigned tests and stage the persistent disk in an iPad Simulator
+      timeout-minutes: 30
       run: |
         python3 - <<'PYTHON'
-        import json, subprocess
-        runtimes = json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json']))['runtimes']
-        runtimes = [r for r in runtimes if r['isAvailable'] and '.iOS-' in r['identifier'] and int(r['version'].split('.')[0]) >= 27]
-        if not runtimes:
-            subprocess.run(['xcodebuild','-downloadPlatform','iOS'], check=True)
-            runtimes = json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json']))['runtimes']
-            runtimes = [r for r in runtimes if r['isAvailable'] and '.iOS-' in r['identifier'] and int(r['version'].split('.')[0]) >= 27]
-        assert runtimes, 'iOS 27+ Simulator runtime required'
-        runtime = max(runtimes, key=lambda r: tuple(map(int,r['version'].split('.'))))
-        types = json.loads(subprocess.check_output(['xcrun','simctl','list','devicetypes','--json']))['devicetypes']
-        ipad = next(t for t in reversed(types) if 'iPad' in t['name'])
-        udid = subprocess.check_output(['xcrun','simctl','create','Debian CI',ipad['identifier'],runtime['identifier']],text=True).strip()
+        import json, os, subprocess, time
         from pathlib import Path
-        import os
+
+        def listing(kind):
+            return json.loads(subprocess.check_output(
+                ['xcrun', 'simctl', 'list', kind, '--json'], timeout=60
+            ))[kind]
+
+        def create_ipad():
+            runtimes = listing('runtimes')
+            runtimes = [r for r in runtimes if r['isAvailable'] and '.iOS-' in r['identifier'] and int(r['version'].split('.')[0]) >= 27]
+            types = [t for t in listing('devicetypes') if t.get('productFamily') == 'iPad' or t['name'].startswith('iPad')]
+            types.sort(key=lambda t: (t.get('minRuntimeVersion', 0), t['name']), reverse=True)
+            deadline = time.monotonic() + 180
+            for runtime in sorted(runtimes, key=lambda r: (tuple(map(int, r['version'].split('.'))), -len(r['identifier'])), reverse=True):
+                supported = runtime.get('supportedDeviceTypes')
+                allowed = {t['identifier'] for t in supported} if supported is not None else None
+                parts = list(map(int, runtime['version'].split('.')))
+                parts += [0] * (3 - len(parts))
+                version = (parts[0] << 16) | (parts[1] << 8) | parts[2]
+                for model in types:
+                    if allowed is not None and model['identifier'] not in allowed:
+                        continue
+                    if not model.get('minRuntimeVersion', 0) <= version <= model.get('maxRuntimeVersion', 0xFFFFFFFF):
+                        continue
+                    if time.monotonic() >= deadline:
+                        print('iPad Simulator selection reached its three-minute deadline', flush=True)
+                        return None
+                    print(f"Trying {model['name']} with {runtime['name']}", flush=True)
+                    result = subprocess.run(
+                        ['xcrun', 'simctl', 'create', 'Debian CI', model['identifier'], runtime['identifier']],
+                        text=True, capture_output=True, timeout=30
+                    )
+                    if result.returncode == 0:
+                        return result.stdout.strip()
+                    print(result.stderr, flush=True)
+            return None
+
+        # Device-type list order is not an age or compatibility order, and
+        # some installed runtimes support only a particular device family.
+        udid = create_ipad()
+        if udid is None:
+            subprocess.run(['xcodebuild', '-downloadPlatform', 'iOS'], check=True, timeout=1200)
+            udid = create_ipad()
+        assert udid, 'A compatible iPad and iOS 27+ Simulator runtime are required'
         with Path(os.environ['GITHUB_ENV']).open('a') as env:
             env.write(f'SIM_UDID={udid}\n')
         PYTHON
@@ -210,6 +242,15 @@ jobs:
           -only-testing:KernariumTests/PersistentDebianTests -parallel-testing-enabled NO \
           -resultBundlePath "$RUNNER_TEMP/write.xcresult" \
           CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64
+        xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/write.xcresult" > "$RUNNER_TEMP/write-summary.json"
+        python3 - <<'PYTHON'
+        import json, os
+        from pathlib import Path
+        summary = json.loads((Path(os.environ['RUNNER_TEMP']) / 'write-summary.json').read_text())
+        counts = {key: summary.get(key) for key in ('totalTestCount', 'passedTests', 'failedTests', 'skippedTests')}
+        print('Debian write test execution:', json.dumps(counts), flush=True)
+        assert counts == dict(totalTestCount=1, passedTests=1, failedTests=0, skippedTests=0), summary
+        PYTHON
     - name: Boot console and verify persistent data
       env:
         TEST_RUNNER_KERNARIUM_ROOTFS: debian-13-phosh.img
@@ -221,6 +262,15 @@ jobs:
           -only-testing:KernariumTests/PersistentDebianTests -parallel-testing-enabled NO \
           -resultBundlePath "$RUNNER_TEMP/read.xcresult" \
           CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64
+        xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/read.xcresult" > "$RUNNER_TEMP/read-summary.json"
+        python3 - <<'PYTHON'
+        import json, os
+        from pathlib import Path
+        summary = json.loads((Path(os.environ['RUNNER_TEMP']) / 'read-summary.json').read_text())
+        counts = {key: summary.get(key) for key in ('totalTestCount', 'passedTests', 'failedTests', 'skippedTests')}
+        print('Debian read test execution:', json.dumps(counts), flush=True)
+        assert counts == dict(totalTestCount=1, passedTests=1, failedTests=0, skippedTests=0), summary
+        PYTHON
     - name: Record successful boot checks on the image release
       env:
         GH_TOKEN: ${{ github.token }}
@@ -233,7 +283,9 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: debian-simulator-diagnostics
-        path: ${{ runner.temp }}/*.xcresult
+        path: |
+          ${{ runner.temp }}/*.xcresult
+          ${{ runner.temp }}/*-summary.json
         if-no-files-found: ignore
     - name: Shut down test Simulator
       if: always() && env.SIM_UDID != ''
