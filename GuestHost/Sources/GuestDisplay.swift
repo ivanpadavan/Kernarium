@@ -57,6 +57,8 @@ struct GuestDisplayView: UIViewControllerRepresentable {
     /// Whether the display holds the keyboard focus the hardware keys need:
     /// the application says no while a sheet or an alert has the keys.
     var hardwareFocus = false
+    /// Physical Linux modifiers held by Kernarium's graphical key panel.
+    var textModifierCodes: Set<UInt16> = []
     /// Told of each contact sent to the guest's touchscreen: its slot, and
     /// whether it is down. A test uses it to see which touches the guest got.
     var contactDidChange: (@MainActor (_ slot: Int, _ pressed: Bool) -> Void)?
@@ -79,6 +81,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
         view.autoResizeDrawable = false
         view.isMultipleTouchEnabled = true
         view.hardwareInput = hardwareInput
+        (view as? TextGuestMetalView)?.heldModifierCodes = textModifierCodes
         view.applyAccessibility(accessibility)
         return GuestDisplayViewController(metalView: view)
     }
@@ -92,6 +95,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
         view.contactDidChange = contactDidChange
         view.scale = scale
         view.hardwareInput = hardwareInput
+        (view as? TextGuestMetalView)?.heldModifierCodes = textModifierCodes
         view.applyAccessibility(accessibility)
         if let keyboardVisible {
             view.setKeyboardVisible(keyboardVisible.wrappedValue)
@@ -748,6 +752,7 @@ class GuestMetalView: MTKView, UIGestureRecognizerDelegate, UIPointerInteraction
 /// keyboard map, by character. Andarium's view takes no text, and its keys
 /// are positions (`GuestHardwareInput`).
 final class TextGuestMetalView: GuestMetalView, UIKeyInput {
+    var heldModifierCodes: Set<UInt16> = []
     var hasText: Bool { true }
     var keyboardType: UIKeyboardType = .asciiCapable
     var autocorrectionType: UITextAutocorrectionType = .no
@@ -762,12 +767,13 @@ final class TextGuestMetalView: GuestMetalView, UIKeyInput {
                 print("Kernarium: unsupported keyboard character \(character)")
                 continue
             }
-            if stroke.shifted {
+            let needsShift = stroke.shifted && !heldModifierCodes.contains(LinuxKeyboard.leftShift)
+            if needsShift {
                 sendKey(code: LinuxKeyboard.leftShift, pressed: true)
             }
             sendKey(code: stroke.code, pressed: true)
             sendKey(code: stroke.code, pressed: false)
-            if stroke.shifted {
+            if needsShift {
                 sendKey(code: LinuxKeyboard.leftShift, pressed: false)
             }
         }
