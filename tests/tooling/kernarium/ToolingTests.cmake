@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 uml_add_tooling_test(
+    NAME kernarium-debian-inputs
+    COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/tests/tooling/kernarium/test_debian_inputs.py
+    LABELS kernarium;package
+    TIMEOUT 60)
+
+uml_add_tooling_test(
     NAME kernarium-device-framework-symbols
     COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/tests/tooling/kernarium/test_device_framework_symbols.py

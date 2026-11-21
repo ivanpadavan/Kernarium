@@ -106,4 +106,19 @@ struct DebianAppTests {
             return last.0 < first.0 && last.1 > first.1
         })
     }
+
+    @Test
+    func invalidDiskGrowthLeavesOriginalBytesAndCapacityIntact() throws {
+        let directory = try makeScratchDirectory("disk-growth-failure")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = directory.appendingPathComponent("invalid.img")
+        let original = Data("a disk without a valid GPT must remain unchanged".utf8)
+        try original.write(to: image)
+        #expect(throws: (any Error).self) {
+            try PersistentDisk.grow(image, to: PersistentDisk.gib)
+        }
+        #expect(try Data(contentsOf: image) == original)
+        #expect(try PersistentDisk.capacity(image) == UInt64(original.count))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["invalid.img"])
+    }
 }

@@ -199,7 +199,7 @@ struct EmulatorSettingsView: View {
                     .accessibilityIdentifier("rootfsPicker")
 
                     if persistentImageSelected {
-                        Text("Current capacity: \(Formats.size(bytes: diskCapacityBytes))")
+                        Text("Current capacity: \(ByteCountFormatter.string(fromByteCount: Int64(clamping: diskCapacityBytes), countStyle: .binary))")
                             .accessibilityIdentifier("persistentDiskCapacity")
                         Picker("Increase disk to", selection: $diskTargetGiB) {
                             Text("Keep current capacity").tag(0)

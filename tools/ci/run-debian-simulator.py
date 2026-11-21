@@ -69,6 +69,7 @@ def main():
     parser.add_argument('--storage', action='store_true')
     parser.add_argument('--single-phase', action='store_true')
     parser.add_argument('--family', choices=['iPad', 'iPhone'], default='iPad')
+    parser.add_argument('--ui-case', help='A concrete KernariumUITests class/method to execute')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     products = args.products.resolve()
@@ -114,9 +115,10 @@ def main():
             selected = products / 'selected.xctestrun'
             selected.write_bytes(plistlib.dumps(configuration))
             result = output / (phase + '.xcresult')
+            test_identifier = 'KernariumUITests/' + args.ui_case if args.ui_case else 'KernariumTests/' + args.suite
             command = ['xcodebuild', 'test-without-building', '-xctestrun', str(selected), '-destination', 'id=' + udid,
                        '-parallel-testing-enabled', 'NO', '-resultBundlePath', str(result),
-                       '-only-testing:KernariumTests/' + args.suite, 'CODE_SIGNING_ALLOWED=NO']
+                       '-only-testing:' + test_identifier, 'CODE_SIGNING_ALLOWED=NO']
             with (output / (phase + '-boot.log')).open('w') as log:
                 process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                            env={**os.environ, **{'TEST_RUNNER_' + k: v for k, v in environment.items()}})
@@ -140,6 +142,10 @@ def main():
             assert counts['failedTests'] == 0 and counts['skippedTests'] == 0, counts
             if args.image:
                 assert counts['totalTestCount'] == 1, counts
+            elif args.ui_case:
+                assert counts['totalTestCount'] == 1, counts
+            elif args.suite == 'DebianAppTests':
+                assert counts['totalTestCount'] == 5, counts
             if args.storage and phase == 'grow':
                 after = (documents / args.image.name).stat()
                 assert after.st_size == target and after.st_size > before.st_size
