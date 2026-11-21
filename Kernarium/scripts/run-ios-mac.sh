@@ -174,7 +174,12 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
 		cmake --preset "$ANDROID_PRESET"
 		cmake --build --preset "$ANDROID_PRESET" --parallel "$JOBS"
 	fi
-	"$ROOT_DIR/Kernarium/scripts/package-ios-frameworks.sh" --runtimes linux $PACKAGE_OPTION
+	RUNTIME_SELECTION=linux
+	if [ "$ANDROID_AUTOMATION" -eq 1 ] || [ -n "$GUEST_BUNDLE" ]; then
+		RUNTIME_SELECTION=all
+	fi
+	"$ROOT_DIR/Kernarium/scripts/package-ios-frameworks.sh" \
+		--runtimes "$RUNTIME_SELECTION" $PACKAGE_OPTION
 	xcodebuild \
 		-project "$ROOT_DIR/Kernarium/Kernarium.xcodeproj" \
 		-scheme Kernarium \
@@ -251,7 +256,8 @@ mkdir -p -- "$DATA_CONTAINER/Documents"
 case "$ROOTFS_FILENAME" in
 *.img)
 	if [ ! -e "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME" ]; then
-		cp "$ROOTFS" "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME"
+		cp -c "$ROOTFS" "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME" ||
+			cp "$ROOTFS" "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME"
 	fi
 	;;
 *)

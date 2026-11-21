@@ -50,6 +50,7 @@ jobs:
             --output "$RUNNER_TEMP/starter-release/accepted-aarch64.env"
           python3 -B tools/rootfs/starter/gpt.py "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
           zstd -T4 -6 --rm "$RUNNER_TEMP/starter-release/debian-13-phosh.img"
+          python3 -c 'from pathlib import Path; import sys; files=list(Path(sys.argv[1]).iterdir()); assert all(p.stat().st_size < 2**31 for p in files), "Release asset exceeds 2 GiB"' "$RUNNER_TEMP/starter-release"
       - name: Upload rootfs assets to the draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,16 +67,19 @@ jobs:
         run: |
           test "$(uname -m)" = arm64
           brew install cmake ninja make meson pkgconf autoconf automake libtool \
-            gettext gperf groff bison flex llvm rsync
+            gettext gperf groff bison flex llvm lld rsync
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
       - name: Prepare isolated case-sensitive kernel filesystem
         run: |
-          hdiutil create -size 24g -type SPARSE -fs APFSX \
+          hdiutil create -size 24g -type SPARSE -fs HFSX \
             -volname KernariumKernel "$RUNNER_TEMP/kernel.sparseimage"
+          df -h "$PWD" "$RUNNER_TEMP"
+          # A sparse image supplies case sensitivity, not extra physical disk.
           mkdir "$RUNNER_TEMP/kernel-volume"
           hdiutil attach "$RUNNER_TEMP/kernel.sparseimage" \
             -mountpoint "$RUNNER_TEMP/kernel-volume" -nobrowse
@@ -101,6 +105,10 @@ jobs:
             --objcopy "$(brew --prefix llvm)/bin/llvm-objcopy"
           tar -C .build/kernel/artifacts -czf "$RUNNER_TEMP/linux-kernel.tar.gz" \
             "$UML_KERNEL_ARTIFACT_DIRECTORY_NAME"
+      - name: Check compressed kernel asset size
+        run: |
+          python3 -c 'from pathlib import Path; import sys; assert Path(sys.argv[1]).stat().st_size < 2**31, "Kernel asset exceeds 2 GiB"' "$RUNNER_TEMP/linux-kernel.tar.gz"
+          df -h "$PWD" "$RUNNER_TEMP/kernel-volume"
       - name: Upload validated kernel artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -142,7 +150,6 @@ jobs:
           python3 -B tools/rootfs/boot-ramdisk/verify_base.py \
             --descriptor tools/rootfs/boot-ramdisk/accepted-aarch64.env \
             --archive ".build/rootfs/$UML_BOOT_BASE_RELEASE/uml-boot-base-aarch64.cpio.gz"
-          zstd -d .build/ci-download/debian-13-phosh.img.zst
       - name: Prepare every pinned iOS dependency
         run: |
           for product in apple-gpu-vulkan-experiment ios-network ios-storage ios-compression; do
@@ -157,6 +164,12 @@ jobs:
           cmake --preset kernarium-ios-device
           cmake --build --preset kernarium-ios-device --parallel 3
           Kernarium/scripts/package-ios-frameworks.sh --sdk device --runtimes linux
+      - name: Release producer intermediates and report disk budget
+        run: |
+          # These are this runner's disposable producer trees, never source or user data.
+          rm -rf .build/dependency-build .build/dependency-cache
+          df -h "$PWD" "$RUNNER_TEMP"
+          du -sh .build external/sources
       - name: Check host boot contracts
         run: |
           cmake --preset macos-unit
@@ -184,6 +197,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO test
       - name: Boot Phosh, write persistent data, shut down
         run: |
+          zstd -d --rm .build/ci-download/debian-13-phosh.img.zst
+          df -h "$PWD"
           Kernarium/scripts/run-ios-mac.sh --no-build --ad-hoc \
             --rootfs "$PWD/.build/ci-download/debian-13-phosh.img" \
             --only-testing KernariumTests/PersistentDebianTests \
@@ -200,6 +215,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          python3 -c 'from pathlib import Path; assert Path(".build/Kernarium-Debian.ipa").stat().st_size < 2**31, "IPA exceeds 2 GiB"'
           gh release upload "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" .build/Kernarium-Debian.ipa --clobber
           gh release edit "debian-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --draft=false --prerelease \
             --notes "Unsigned Kernarium IPA for SideStore; iOS 27+ and Metal 4 required by current upstream. Debian 13 ARM64 Phosh disk is delivered as .img.zst: decompress and place debian-13-phosh.img in Kernarium Documents. Start graphical desktop selects Phosh or the console for the next launch. The disk persists; replacing it erases its guest data. CI passed build, graphical boot, console boot, clean shutdown and data persistence checks on an Apple silicon Mac using the iOS runtime. No physical iPhone or LiveContainer validation has been performed. Local console user debian has passwordless sudo; run passwd before using a lock screen. SSH permits only owner-installed public keys. Sources: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
