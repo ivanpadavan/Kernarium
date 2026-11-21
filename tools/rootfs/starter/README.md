@@ -33,8 +33,15 @@ Squeekboard and audits every required session desktop entry and executable.
 The minimal Debian product also auto-logs in on these three consoles, as root,
 with no initial password. It contains no Phosh or SSH server. Set a personal
 password with `passwd root` from the local console. The image-only CI workflow
-builds Phosh and minimal independently without rebuilding the kernel, IPA or
-boot base, and publishes each completed disk before guest boot tests.
+builds Phosh and minimal independently from a verified, cached Debian package
+base without rebuilding the kernel, IPA or boot base. Integrity-checked disks
+are available as draft assets during guest tests; publication requires real
+boot, login, persistence and shutdown checks with a prebuilt validation host.
+
+The guest session service accepts explicit clipboard transfers and serial TTY
+geometry over host-only virtio-vsock. Clipboard transfers do not send console
+input. The Phosh image starts Squeekboard with its graphical user session and
+offers GNOME Console as its default terminal.
 
 `debian-13-minimal-armhf.img` is the opt-in 32-bit Arm twin of the minimal
 Debian image for AArch32 guests (see below).

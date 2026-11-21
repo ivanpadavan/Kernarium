@@ -28,8 +28,16 @@ def main() -> None:
     def executable(command: str) -> None:
         guest('/bin/sh', '-ec', 'command -v "$1" >/dev/null', 'audit', command)
 
-    for command in ('phosh-session', 'phoc', 'gnome-session', 'squeekboard'):
+    for command in ('phosh-session', 'phoc', 'gnome-session', 'squeekboard',
+                    'gsettings', 'wl-copy', 'wl-paste', 'kgx'):
         executable(command)
+    keyboard = configparser.ConfigParser(interpolation=None)
+    keyboard.read_string(read('/etc/systemd/user/kernarium-squeekboard.service'))
+    assert keyboard['Service']['BusName'] == 'sm.puri.OSK0'
+    assert 'graphical-session.target' in keyboard['Unit']['PartOf']
+    shell = configparser.ConfigParser(interpolation=None)
+    shell.read_string(read('/etc/systemd/user/mobi.phosh.Shell.service.d/keyboard.conf'))
+    assert 'kernarium-squeekboard.service' in shell['Unit']['Wants'].split()
     session = configparser.ConfigParser(interpolation=None)
     session.read_string(read('/usr/share/gnome-session/sessions/phosh.session'))
     components = session['GNOME Session']['RequiredComponents'].strip(';').split(';')
