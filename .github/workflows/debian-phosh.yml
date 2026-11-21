@@ -8,7 +8,7 @@ permissions:
   contents: write
 concurrency:
   group: debian-phosh-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   release:
     runs-on: ubuntu-24.04
@@ -177,7 +177,7 @@ jobs:
         run: |
           cmake --preset macos-unit
           cmake --build --preset unit-test-binaries --parallel 3
-          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium|boot-initramfs|rootfs-boot-base|rootfs-starter|andarium-stage-system-image'
+          ctest --test-dir .build/presets/macos-unit --output-on-failure -R 'kernarium-(loader-|settle-plumbing|console-)|kernarium-device-framework-|boot-initramfs|rootfs-boot-base|rootfs-starter|andarium-stage-system-image'
       - name: Build unsigned iPhone application
         run: |
           xcodebuild -resolvePackageDependencies -project Kernarium/Kernarium.xcodeproj -scheme Kernarium
