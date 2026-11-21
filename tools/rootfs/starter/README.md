@@ -16,8 +16,17 @@ archives and three raw GPT disks:
   the [Virtio video VA-API driver](../../video/va-v4l2/README.md) with the
   `/etc/chromium.d` file that makes Chromium use it.
 
-An opt-in fourth disk, `debian-13-minimal-armhf.img`, is the 32-bit Arm twin of
-the minimal Debian image for AArch32 guests (see below).
+`--product debian-13-phosh` produces `debian-13-phosh.img`, an opt-in
+Debian 13 ARM64 disk with Phosh, Phoc, greetd and a terminal. greetd is wanted
+only by `graphical.target`; a `systemd.unit=multi-user.target` launch starts
+the serial console with no desktop processes. Both modes use the same writable
+root and the `debian` account with passwordless sudo. Password authentication
+for SSH is disabled and host keys are generated inside the guest on its first
+boot. Install your own authorized public key from the local console to use SSH.
+Set a personal password with `passwd` for the desktop lock screen.
+
+`debian-13-minimal-armhf.img` is the opt-in 32-bit Arm twin of the minimal
+Debian image for AArch32 guests (see below).
 
 Every disk has one Linux-filesystem GPT partition ending at the last usable
 LBA. Networking, the account, the getty and the desktop policy belong to the

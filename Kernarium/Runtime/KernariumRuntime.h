@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define KERNARIUM_RUNTIME_API_VERSION 46U
+#define KERNARIUM_RUNTIME_API_VERSION 47U
 
 #if defined(__OBJC__)
 @class MTKView;
@@ -102,7 +102,8 @@ enum {
     KERNARIUM_RUNTIME_ANDROID_CAMERA_LIVE = 1,
 };
 
-/* A boot request. Linux guests supply rootfs_path and overlay_path. Android
+/* A boot request. Linux guests supply rootfs_path and, for legacy images,
+ * overlay_path; writable GPT .img disks need no overlay. Android
  * guests supply the release directory (guest/system.img, the read-only system
  * disk; guest/partition-layout.json; boot/kernel-command-line.txt), the path of
  * the instance's writable data disk, and the desired boot mode. The runtime
@@ -242,6 +243,10 @@ typedef struct kernarium_runtime_boot {
     const char* android_ethernet_mac;
     uint32_t android_aot_disabled;
     uint32_t android_root;
+    /* Runtime API 47: 0 starts graphical.target, 1 multi-user.target.
+     * Linux .img paths are writable GPT disks rooted at /dev/ubda1 and need
+     * no overlay_path. Their contents survive subsequent launches. */
+    uint32_t linux_console_boot;
 } kernarium_runtime_boot;
 
 /* What a launch's host GPU budget comes to, as the runtime evaluates it for

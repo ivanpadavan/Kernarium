@@ -117,6 +117,7 @@ struct EmulatorConfiguration: Equatable {
     var retinaMode: Bool
     var autoResizeGuest: Bool
     var androidBootMode: AndroidBootMode
+    var linuxGraphicalBoot = true
     var gpuBudgetApplicationMiB = defaultGPUBudgetApplicationMiB
     var gpuBudgetEngineMiB = defaultGPUBudgetEngineMiB
     var gpuBudgetHeadroomMiB = defaultGPUBudgetHeadroomMiB
@@ -318,6 +319,8 @@ struct EmulatorConfiguration: Equatable {
             autoResizeGuest: environmentAutoResizeGuest ??
                 storedAutoResizeGuest,
             androidBootMode: environmentAndroidBootMode ?? storedAndroidBootMode,
+            linuxGraphicalBoot: environmentFlag("KERNARIUM_LINUX_CONSOLE_BOOT")
+                .map { !$0 } ?? stored(Key.linuxGraphicalBoot, true),
             gpuBudgetApplicationMiB: gpuBudgetApplicationMiB,
             gpuBudgetEngineMiB: gpuBudgetEngineMiB,
             gpuBudgetHeadroomMiB: gpuBudgetHeadroomMiB
@@ -343,6 +346,7 @@ struct EmulatorConfiguration: Equatable {
         defaults.set(retinaMode, forKey: Key.retinaMode)
         defaults.set(autoResizeGuest, forKey: Key.autoResizeGuest)
         defaults.set(androidBootMode.rawValue, forKey: Key.androidBootMode)
+        defaults.set(linuxGraphicalBoot, forKey: Key.linuxGraphicalBoot)
     }
 
     private static func normalizedGuestMemoryMiB(_ value: Int) -> Int {
@@ -390,6 +394,7 @@ struct EmulatorConfiguration: Equatable {
         static let retinaMode = "emulator.retinaMode"
         static let autoResizeGuest = "emulator.autoResizeGuest"
         static let androidBootMode = "emulator.androidBootMode"
+        static let linuxGraphicalBoot = "emulator.linuxGraphicalBoot"
     }
 }
 
@@ -412,10 +417,9 @@ enum GuestSelection {
 }
 
 enum RootfsImage {
-    /// The accepted KDE desktop image (tools/rootfs/desktop/images.json),
-    /// which carries its own session setup. It applies only while the
-    /// settings store no name: a stored name, `rootfs.erofs` included, is kept.
-    static let defaultFilename = "kde-20260929-r2.erofs"
+    /// The writable Debian Phosh starter disk. A stored image name is kept;
+    /// changing the default never replaces an existing guest's disk.
+    static let defaultFilename = "debian-13-phosh.img"
     static let environmentKey = "KERNARIUM_ROOTFS"
 
     nonisolated static var documentsDirectory: URL {
@@ -443,6 +447,7 @@ enum RootfsImage {
               (filename as NSString).lastPathComponent == filename,
               namesOnKernelCommandLine(filename),
               pathExtension == "erofs" || pathExtension == "ext4" ||
+                  pathExtension == "img" ||
                   pathExtension == GuestBundle.pathExtension
         else {
             return nil

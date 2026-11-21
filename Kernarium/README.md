@@ -98,9 +98,11 @@ a callback; the runtime API keeps it for an application that wants the reports.
 ## Guest storage
 
 A Linux guest boots an image file in the application's Documents directory:
-the one the settings name, or, while they name none, the accepted KDE desktop
-image `kde-20260929-r2.erofs`
-([`tools/rootfs/desktop`](../tools/rootfs/desktop/README.md)). A name the
+the one the settings name, or, while they name none, `debian-13-phosh.img`
+([`tools/rootfs/starter`](../tools/rootfs/starter/README.md)). A `.img` is a
+writable GPT disk: its sole ext4 partition is the persistent guest root. The
+application reopens that file on every launch and never recreates it. Keep a
+backup of the disk before replacing or deleting the application or its data. A name the
 settings already store is kept, and every image in Documents stays selectable.
 An Android guest is a `.kern` bundle directory in Documents; the
 [Android README](../android/lineage-24/README.md#apple-consumers-and-guest-bundles)
@@ -128,17 +130,52 @@ A Linux run boots the base archive the runtime embeds
 ([`tools/rootfs/boot-ramdisk`](../tools/rootfs/boot-ramdisk/README.md))
 followed by a segment holding the generic per-run `/init` and its
 `/boot.env`; the runtime writes that initrd to its temporary directory and
-removes it when the run returns. The parameters mount the image read-only on
-`ubd0` beneath an overlay whose writable layer is an ext4 filesystem formatted
-afresh on `ubd1` (the sparse `kernarium-overlay.ext4` the application recreates
-in its temporary directory at each launch). `/init` then switches root into the
-image's own `/sbin/init`, which boots `graphical.target`.
+removes it when the run returns. For a writable GPT `.img`, the parameters
+select `/dev/ubda1`, ext4, `UML_BOOT_UPPER=none` and the starter's conservative
+grow-on-boot policy. Only `ubd0` is attached, writable; no overlay is created.
+For legacy EROFS and sealed ext4 images, the parameters mount the image
+read-only on `ubd0` beneath a disposable ext4 overlay on `ubd1`.
+`/init` switches into the image's own `/sbin/init`. **Start graphical desktop**
+in Settings selects `graphical.target` or `multi-user.target` on the next
+launch, keeping the same disk. Runtime API 47 appends `linux_console_boot`:
+zero selects the desktop and one the console. Older, shorter boot requests
+keep the desktop default; Android ignores this field.
 
 Nothing is typed on the console and the runtime edits no image: accounts,
 device groups, getty and display-manager policy, network and resolver belong
 to the image. The KDE, Phrog and postmarketOS images Kernarium boots carry
 that setup ([`tools/rootfs/desktop`](../tools/rootfs/desktop/README.md)); the
 unified `rootfs.erofs` carries none of it and boots to its own defaults.
+
+## Debian CI and installation
+
+[Debian Phosh for iPhone](../.github/workflows/debian-phosh.yml) runs on pushes
+to `debian-phosh` and by manual dispatch. All dependency installation, source
+preparation, kernel compilation, rootfs production and app compilation happen
+on GitHub runners. The native ARM64 Linux job produces Debian and a new boot
+base, audited by the existing complete base verifier before acceptance. A
+separate macOS job produces the validated Linux kernel artifact; the iOS
+build consumes that artifact and never invokes Kbuild. No Android image or
+Android kernel is built.
+
+The fork's Xcode target embeds Linux alone. Package it with
+`Kernarium/scripts/package-ios-frameworks.sh --sdk device --runtimes linux`.
+Current upstream requires iOS 27 and Metal 4; CI uses the `xcode-27` ARM64
+macOS 27 image. The downloaded IPA is unsigned for signing in SideStore.
+Decompress `debian-13-phosh.img.zst` and put `debian-13-phosh.img` in the app's
+Documents directory using Files. Reuse the disk to keep installed packages,
+repositories and user files. The desktop and the serial console log in as
+`debian`; `sudo` needs no password. Set a personal password with `passwd`
+before using the Phosh lock screen. SSH accepts only public keys the owner
+installs; each guest generates its own host keys on first boot.
+
+CI starts the actual iOS device runtime on an Apple silicon Mac in Designed
+for iPad mode. Its opt-in `PersistentDebianTests` first waits for Phosh and
+Phoc, writes a marker and powers off, then boots the same disk in console
+mode, verifies the marker and absence of the desktop processes, and powers
+off again. Only a successful build and both boots publish the release; failed
+runs retain a draft for diagnosis. This does not validate installation,
+memory limits, JIT or LiveContainer behavior on a physical iPhone.
 
 ## Automation runs
 

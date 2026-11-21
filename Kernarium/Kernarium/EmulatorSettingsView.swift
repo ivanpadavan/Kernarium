@@ -213,8 +213,19 @@ struct EmulatorSettingsView: View {
                         .accessibilityIdentifier("androidBootModePicker")
                     }
 
+                    if !androidBundleSelected {
+                        Toggle(
+                            "Start graphical desktop",
+                            isOn: $configuration.linuxGraphicalBoot
+                        )
+                        .accessibilityIdentifier("linuxGraphicalBootToggle")
+                        Text("Turn off to boot the same Debian disk to the console.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Text(
-                        "EROFS images and .\(GuestBundle.pathExtension) " +
+                        "Writable GPT .img disks, EROFS images and .\(GuestBundle.pathExtension) " +
                         "guest bundles are loaded from Documents."
                     )
                 }

@@ -24,6 +24,7 @@ BOOT_BASES = {
 }
 DEBIAN_IMAGES = {
     "debian-13-minimal": "debian-13-minimal.img",
+    "debian-13-phosh": "debian-13-phosh.img",
     "debian-13-plasma-wayland": "debian-13-plasma-wayland.img",
     "debian-13-minimal-armhf": "debian-13-minimal-armhf.img",
 }

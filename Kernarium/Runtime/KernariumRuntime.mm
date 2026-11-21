@@ -1157,7 +1157,7 @@ bool usableFile(const char* path)
     return std::filesystem::is_regular_file(path, error) && !error;
 }
 
-bool ext4Rootfs(const char* path)
+std::string rootfsExtension(const char* path)
 {
     std::string extension = std::filesystem::path {path}.extension().string();
     std::transform(
@@ -1167,7 +1167,12 @@ bool ext4Rootfs(const char* path)
         [](unsigned char character) {
             return static_cast<char>(std::tolower(character));
         });
-    return extension == ".ext4";
+    return extension;
+}
+
+bool ext4Rootfs(const char* path)
+{
+    return rootfsExtension(path) == ".ext4";
 }
 
 bool immutableExt4Rootfs(const char* path)
@@ -1341,12 +1346,16 @@ std::string fbconFontArgument(uint32_t dotsPerInch)
 }
 
 /* A Linux guest boots the embedded base archive and a segment holding the
- * generic per-run /init and these parameters: the image read-only beneath an
- * overlay whose writable layer is a fresh ext4 filesystem on the overlay
- * disk, ubd1, and then the image's own init. Kernarium/README.md and
+ * generic per-run /init and these parameters: a GPT disk's writable partition,
+ * or a legacy image read-only beneath a fresh ext4 overlay on ubd1, followed
+ * by the image's own init. Kernarium/README.md and
  * tools/rootfs/boot-ramdisk/README.md own the contract. */
-std::string bootParameters(bool ext4Image)
+std::string bootParameters(bool ext4Image, bool persistentDisk)
 {
+    if (persistentDisk)
+        return "UML_BOOT_ROOT=/dev/ubda1\nUML_BOOT_ROOT_TYPE=ext4\n"
+               "UML_BOOT_UPPER=none\nUML_BOOT_GROW=1\n"
+               "UML_BOOT_ENTRY=/sbin/init\n";
     std::string parameters {"UML_BOOT_ROOT=/dev/ubda\nUML_BOOT_ROOT_TYPE="};
     parameters.append(ext4Image ? "ext4" : "erofs");
     parameters.append(
@@ -1364,7 +1373,7 @@ class RunInitrd final {
 public:
     /* `payload` is a padded newc segment appended after the runtime's own,
      * whose files replace the runtime's. */
-    RunInitrd(bool ext4Image, std::span<const std::byte> payload)
+    RunInitrd(bool ext4Image, bool persistentDisk, std::span<const std::byte> payload)
     {
         const std::filesystem::path directory {
             NSTemporaryDirectory().fileSystemRepresentation};
@@ -1396,7 +1405,7 @@ public:
                     uml_boot_init_end - uml_boot_init_start)}),
             0755,
             0);
-        const std::string parameters = bootParameters(ext4Image);
+        const std::string parameters = bootParameters(ext4Image, persistentDisk);
         archive.addFile(
             "/boot.env",
             std::as_bytes(std::span {parameters.data(), parameters.size()}),
@@ -1479,6 +1488,7 @@ struct GuestRequest final {
     std::string rootfsPath;
     std::string overlayPath;
     bool derivativeRootfs {};
+    bool persistentDisk {};
     /* The run's initrd and the systemd target, both fixed for the launch. */
     std::string initrdArgument;
     std::string systemdUnit;
@@ -1889,7 +1899,8 @@ private:
         arguments.emplace_back("console=ttyS0");
         arguments.emplace_back(fbconFontArgument(request_.dotsPerInch));
         arguments.emplace_back(boot->console->kernelArgument());
-        arguments.emplace_back("ubd1=" + request_.overlayPath);
+        if (!request_.persistentDisk)
+            arguments.emplace_back("ubd1=" + request_.overlayPath);
 #endif
         arguments.emplace_back(uml::gpu::virtioDeviceArgument(
             gpu_.takeConnectionName(),
@@ -2054,7 +2065,9 @@ private:
 #else
         /* A sealed ext4 derivative is attached read-only; the per-run /init
          * mounts either kind of image beneath the overlay. */
-        if (request_.derivativeRootfs)
+        if (request_.persistentDisk)
+            arguments.emplace_back("ubd0=" + request_.rootfsPath);
+        else if (request_.derivativeRootfs)
             arguments.emplace_back("ubd0cr=" + request_.rootfsPath);
         arguments.emplace_back("systemd.unit=" + request_.systemdUnit);
         arguments.emplace_back("plymouth.enable=0");
@@ -2530,15 +2543,18 @@ int runtimeRun(
 #else
         const char* rootfsPath = boot->rootfs_path;
         const char* overlayPath = boot->overlay_path;
+        request.persistentDisk = rootfsPath != nullptr &&
+            rootfsExtension(rootfsPath) == ".img";
         if (!usableFile(rootfsPath) || !immutableExt4Rootfs(rootfsPath) ||
-            !usableFile(overlayPath)) {
+            (request.persistentDisk ? access(rootfsPath, W_OK) != 0
+                                    : !usableFile(overlayPath))) {
             std::fputs("Kernarium: invalid rootfs or overlay path\n", stderr);
             return -UML_EMULATOR_INVALID_ARGUMENT;
         }
         /* Both are named in UBD kernel arguments, which cannot carry a path
          * with whitespace, a quote, a comma or a colon as itself. */
         if (!uml::block::usable_ubd_path(rootfsPath) ||
-            !uml::block::usable_ubd_path(overlayPath)) {
+            (!request.persistentDisk && !uml::block::usable_ubd_path(overlayPath))) {
             std::fprintf(
                 stderr,
                 "Kernarium: %s cannot be named on the kernel command line; "
@@ -2548,8 +2564,19 @@ int runtimeRun(
             return -UML_EMULATOR_INVALID_ARGUMENT;
         }
         request.rootfsPath = rootfsPath;
-        request.overlayPath = overlayPath;
+        request.overlayPath = overlayPath == nullptr ? "" : overlayPath;
         request.derivativeRootfs = ext4Rootfs(rootfsPath);
+        if (boot->struct_size >= offsetof(kernarium_runtime_boot, linux_console_boot) +
+                                     sizeof(boot->linux_console_boot) &&
+            boot->linux_console_boot > 1) {
+            std::fputs("Kernarium: invalid Linux boot mode\n", stderr);
+            return -UML_EMULATOR_INVALID_ARGUMENT;
+        }
+        request.systemdUnit =
+            boot->struct_size >= offsetof(kernarium_runtime_boot, linux_console_boot) +
+                                     sizeof(boot->linux_console_boot) &&
+                    boot->linux_console_boot != 0
+                ? "multi-user.target" : "graphical.target";
 #endif
         /* A stop asked for before this run is not carried into it, and the
          * disposition every later run of the library returns to is set before
@@ -2685,19 +2712,22 @@ int runtimeRun(
                         ? "graphical.target"
                         : automation->systemdUnit().c_str());
             const RunInitrd initrd {
-                request.derivativeRootfs,
+                request.derivativeRootfs, request.persistentDisk,
                 automation ? automation->payload()
                            : std::span<const std::byte> {}};
             request.automation = automation.get();
             request.systemdUnit =
                 automation && !automation->systemdUnit().empty()
                 ? automation->systemdUnit()
-                : std::string {"graphical.target"};
+                : request.systemdUnit;
 #else
-            const RunInitrd initrd {request.derivativeRootfs, {}};
-            request.systemdUnit = "graphical.target";
+            const RunInitrd initrd {
+                request.derivativeRootfs, request.persistentDisk, {}};
 #endif
             request.initrdArgument = initrd.kernelArgument();
+#endif
+#if !KERNARIUM_RUNTIME_ANDROID_GUEST
+            const bool persistentDisk = request.persistentDisk;
 #endif
             /* Every boot's device services end before guest RAM is released. */
             RestartableGuest guest {
@@ -2714,7 +2744,7 @@ int runtimeRun(
 #if KERNARIUM_RUNTIME_ANDROID_GUEST
                 .rootfs_path = nullptr,
 #else
-                .rootfs_path = rootfsPath,
+                .rootfs_path = persistentDisk ? nullptr : rootfsPath,
 #endif
                 .kernel_image = uml_elf_start,
                 .kernel_image_size = static_cast<std::size_t>(

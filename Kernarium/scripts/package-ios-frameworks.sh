@@ -23,6 +23,9 @@
 # and start the background job with the guest, and checks that the release
 # Android runtime carries neither setting.
 #
+# --runtimes linux packages only Linux; the fork's Kernarium target embeds
+# only that runtime. Its host test archives come from the Linux build tree.
+#
 # --runtimes android packages the Android runtime alone, for Andarium, whose
 # builds need not build the Linux runtime (--automation, which packages it,
 # conflicts with it). The output directory is shared: Kernarium needs the
@@ -70,7 +73,7 @@ AUTOMATION=0
 ANDROID_AUTOMATION=0
 RUNTIMES=all
 SDKS=
-USAGE="usage: package-ios-frameworks.sh [--sdk device|simulator]... [--automation] [--android-automation] [--runtimes all|android]"
+USAGE="usage: package-ios-frameworks.sh [--sdk device|simulator]... [--automation] [--android-automation] [--runtimes all|linux|android]"
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	--sdk)
@@ -98,11 +101,14 @@ while [ "$#" -gt 0 ]; do
 done
 case "$RUNTIMES" in
 all) ;;
+linux)
+	[ "$ANDROID_AUTOMATION" -eq 0 ] || fail "Linux packaging cannot use Android automation"
+	;;
 android)
 	[ "$AUTOMATION" -eq 0 ] ||
 		fail "--automation packages the Linux runtime; it conflicts with --runtimes android"
 	;;
-*) fail "--runtimes takes all or android: $RUNTIMES" ;;
+*) fail "--runtimes takes all, linux or android: $RUNTIMES" ;;
 esac
 
 find_tool()
@@ -168,13 +174,19 @@ SIMULATOR_GPU_PREFIX=${KERNARIUM_SIMULATOR_GPU_PREFIX:-"$ROOT_DIR/.build/depende
 SIMULATOR_GPU="$SIMULATOR_GPU_PREFIX/Frameworks"
 STORAGE="$ROOT_DIR/.build/dependencies/ios-storage/GPTFDisk.xcframework"
 ZSTD="$ROOT_DIR/.build/dependencies/ios-zstd/LibZstd.xcframework"
-HOST_BATTERY="$ROOT_DIR/.build/$ANDROID_TREE/darwin/platform/libuml_host_battery.a"
+HOST_TREE=$ANDROID_TREE
+SIMULATOR_HOST_TREE=$SIMULATOR_ANDROID_TREE
+if [ "$RUNTIMES" = linux ]; then
+	HOST_TREE=$RUNTIME_TREE
+	SIMULATOR_HOST_TREE=$SIMULATOR_RUNTIME_TREE
+fi
+HOST_BATTERY="$ROOT_DIR/.build/$HOST_TREE/darwin/platform/libuml_host_battery.a"
 HOST_BATTERY_HEADER="$ROOT_DIR/darwin/platform/host_battery.hpp"
-ANDROID_RUNTIME_TREE="$ROOT_DIR/.build/$ANDROID_TREE"
+ANDROID_RUNTIME_TREE="$ROOT_DIR/.build/$HOST_TREE"
 HOST_VIDEO_ENCODER="$ANDROID_RUNTIME_TREE/darwin/platform/libuml_video_encoder.a"
 HOST_VIDEO_ENCODER_HEADERS="$ROOT_DIR/darwin/platform/video_encoder.hpp $ROOT_DIR/darwin/platform/video_decoder.hpp"
-SIMULATOR_HOST_BATTERY="$ROOT_DIR/.build/$SIMULATOR_ANDROID_TREE/darwin/platform/libuml_host_battery.a"
-SIMULATOR_ANDROID_RUNTIME_TREE="$ROOT_DIR/.build/$SIMULATOR_ANDROID_TREE"
+SIMULATOR_HOST_BATTERY="$ROOT_DIR/.build/$SIMULATOR_HOST_TREE/darwin/platform/libuml_host_battery.a"
+SIMULATOR_ANDROID_RUNTIME_TREE="$ROOT_DIR/.build/$SIMULATOR_HOST_TREE"
 SIMULATOR_HOST_VIDEO_ENCODER="$SIMULATOR_ANDROID_RUNTIME_TREE/darwin/platform/libuml_video_encoder.a"
 # The ahead-of-time framework of each Android runtime tree.
 AOT_FRAMEWORK=UmlArm64Aot
@@ -207,10 +219,14 @@ for framework in \
 	[ -d "$framework" ] || fail "missing framework slice: $framework"
 done
 if has_sdk device; then
-	[ -d "$DEVICE_RUNTIME_ANDROID" ] ||
+	[ "$RUNTIMES" = linux ] || [ -d "$DEVICE_RUNTIME_ANDROID" ] ||
 		fail "missing framework slice: $DEVICE_RUNTIME_ANDROID"
 	[ "$RUNTIMES" = android ] || [ -d "$DEVICE_RUNTIME_4K" ] ||
 		fail "missing framework slice: $DEVICE_RUNTIME_4K"
+	if [ "$RUNTIMES" = linux ]; then
+		"$CMAKE" --build "$ANDROID_RUNTIME_TREE" --target uml_host_battery ||
+			fail "could not build the host battery archive"
+	fi
 	[ -f "$HOST_BATTERY" ] || fail "missing host battery archive: $HOST_BATTERY"
 	# The encoder archive is a static library of the runtime tree; it is built
 	# here when the runtime itself has not linked it yet.
@@ -223,7 +239,7 @@ if has_sdk device; then
 	done
 fi
 if has_sdk simulator; then
-	[ -d "$SIMULATOR_RUNTIME_ANDROID" ] ||
+	[ "$RUNTIMES" = linux ] || [ -d "$SIMULATOR_RUNTIME_ANDROID" ] ||
 		fail "missing framework slice: $SIMULATOR_RUNTIME_ANDROID"
 	[ "$RUNTIMES" = android ] || [ -d "$SIMULATOR_RUNTIME_4K" ] ||
 		fail "missing framework slice: $SIMULATOR_RUNTIME_4K"
@@ -231,6 +247,10 @@ if has_sdk simulator; then
 		[ -d "$SIMULATOR_GPU/$framework.framework" ] ||
 			fail "missing framework slice: $SIMULATOR_GPU/$framework.framework"
 	done
+	if [ "$RUNTIMES" = linux ]; then
+		"$CMAKE" --build "$SIMULATOR_ANDROID_RUNTIME_TREE" --target uml_host_battery ||
+			fail "could not build the host battery archive"
+	fi
 	[ -f "$SIMULATOR_HOST_BATTERY" ] ||
 		fail "missing host battery archive: $SIMULATOR_HOST_BATTERY"
 	"$CMAKE" --build "$SIMULATOR_ANDROID_RUNTIME_TREE" --target uml_video_encoder ||
@@ -247,20 +267,20 @@ links_aot()
 AOT_DEVICE=0
 AOT_SIMULATOR=0
 if has_sdk device; then
-	if links_aot "$DEVICE_RUNTIME_ANDROID/$RUNTIME_ANDROID_4K"; then
+	if [ "$RUNTIMES" != linux ] && links_aot "$DEVICE_RUNTIME_ANDROID/$RUNTIME_ANDROID_4K"; then
 		AOT_DEVICE=1
 		[ -d "$DEVICE_AOT" ] || fail "missing framework slice: $DEVICE_AOT"
 	fi
-	if [ "$RUNTIMES" = all ] && links_aot "$DEVICE_RUNTIME_4K/$RUNTIME_4K"; then
+	if [ "$RUNTIMES" != android ] && links_aot "$DEVICE_RUNTIME_4K/$RUNTIME_4K"; then
 		fail "$RUNTIME_4K links the ahead-of-time framework, which only the Android runtime may"
 	fi
 fi
 if has_sdk simulator; then
-	if links_aot "$SIMULATOR_RUNTIME_ANDROID/$RUNTIME_ANDROID_4K"; then
+	if [ "$RUNTIMES" != linux ] && links_aot "$SIMULATOR_RUNTIME_ANDROID/$RUNTIME_ANDROID_4K"; then
 		AOT_SIMULATOR=1
 		[ -d "$SIMULATOR_AOT" ] || fail "missing framework slice: $SIMULATOR_AOT"
 	fi
-	if [ "$RUNTIMES" = all ] && links_aot "$SIMULATOR_RUNTIME_4K/$RUNTIME_4K"; then
+	if [ "$RUNTIMES" != android ] && links_aot "$SIMULATOR_RUNTIME_4K/$RUNTIME_4K"; then
 		fail "$RUNTIME_4K links the ahead-of-time framework, which only the Android runtime may"
 	fi
 fi
@@ -325,18 +345,21 @@ simulator_slice()
 PACKAGED_SLICES=
 has_sdk device && PACKAGED_SLICES="$PACKAGED_SLICES ios-arm64:2"
 has_sdk simulator && PACKAGED_SLICES="$PACKAGED_SLICES ios-arm64-simulator:7"
-RUNTIME_FRAMEWORKS="$RUNTIME_ANDROID_4K"
-if [ "$RUNTIMES" = all ]; then
-	RUNTIME_FRAMEWORKS="$RUNTIME_4K $RUNTIME_ANDROID_4K"
+RUNTIME_FRAMEWORKS=
+[ "$RUNTIMES" = linux ] || RUNTIME_FRAMEWORKS="$RUNTIME_ANDROID_4K"
+if [ "$RUNTIMES" != android ]; then
+	RUNTIME_FRAMEWORKS="$RUNTIME_4K $RUNTIME_FRAMEWORKS"
 	create_xcframework "$RUNTIME_4K" \
 		"$(device_slice "$DEVICE_RUNTIME_4K")" \
 		"$(simulator_slice "$SIMULATOR_RUNTIME_4K")" \
 		"$DEVICE_RUNTIME_4K.dSYM" "$SIMULATOR_RUNTIME_4K.dSYM"
 fi
-create_xcframework "$RUNTIME_ANDROID_4K" \
-	"$(device_slice "$DEVICE_RUNTIME_ANDROID")" \
-	"$(simulator_slice "$SIMULATOR_RUNTIME_ANDROID")" \
-	"$DEVICE_RUNTIME_ANDROID.dSYM" "$SIMULATOR_RUNTIME_ANDROID.dSYM"
+if [ "$RUNTIMES" != linux ]; then
+	create_xcframework "$RUNTIME_ANDROID_4K" \
+		"$(device_slice "$DEVICE_RUNTIME_ANDROID")" \
+		"$(simulator_slice "$SIMULATOR_RUNTIME_ANDROID")" \
+		"$DEVICE_RUNTIME_ANDROID.dSYM" "$SIMULATOR_RUNTIME_ANDROID.dSYM"
+fi
 if [ -n "$AOT_FRAMEWORKS" ]; then
 	# The framework holds no debug information, so its dSYM is the binary's
 	# identity alone, which an archive's symbol collection expects.
@@ -541,7 +564,7 @@ for slice_platform in $PACKAGED_SLICES; do
 	ios-arm64) preset=kernarium-ios-device ;;
 	*) preset=kernarium-ios-simulator ;;
 	esac
-	if [ "$RUNTIMES" = all ]; then
+	if [ "$RUNTIMES" != android ]; then
 		binary="$STAGE/$RUNTIME_4K.xcframework/$slice/$RUNTIME_4K.framework/$RUNTIME_4K"
 		if LC_ALL=C grep -a -q KERNARIUM_BOOT_PAYLOAD "$binary"; then
 			[ "$AUTOMATION" -eq 1 ] ||
@@ -568,6 +591,7 @@ for slice_platform in $PACKAGED_SLICES; do
 		fi
 	fi
 
+	[ "$RUNTIMES" != linux ] || continue
 	binary="$STAGE/$RUNTIME_ANDROID_4K.xcframework/$slice/$RUNTIME_ANDROID_4K.framework/$RUNTIME_ANDROID_4K"
 	if LC_ALL=C grep -a -q KERNARIUM_ANDROID_ADB_AUTH "$binary"; then
 		[ "$ANDROID_AUTOMATION" -eq 1 ] ||
@@ -641,7 +665,9 @@ case $publish in
 	;;
 *) fail "could not publish the XCFrameworks: $OUTPUT" ;;
 esac
-if [ "$RUNTIMES" = android ]; then
+if [ "$RUNTIMES" = linux ]; then
+	printf '%s\n' "published Linux runtime XCFrameworks: $OUTPUT"
+elif [ "$RUNTIMES" = android ]; then
 	printf '%s\n' "published Android runtime XCFrameworks: $OUTPUT"
 elif [ "$AUTOMATION" -eq 1 ] || [ "$ANDROID_AUTOMATION" -eq 1 ]; then
 	printf '%s\n' "published Kernarium automation XCFrameworks: $OUTPUT"

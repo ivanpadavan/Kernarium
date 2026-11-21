@@ -812,8 +812,8 @@ private struct PreparedBoot: Sendable {
     /// and grows a smaller one to it. 0 leaves an existing disk alone.
     let androidDataGiB: UInt32
 
-    init(rootfs: URL, overlay: URL) {
-        paths = [rootfs.path, overlay.path, nil, nil]
+    init(rootfs: URL, overlay: URL?) {
+        paths = [rootfs.path, overlay?.path, nil, nil]
         androidBootMode = .automatic
         androidDataGiB = 0
     }
@@ -877,7 +877,8 @@ private func runGuest(
     guestMemoryMiB: UInt32,
     vCPUCount: UInt32,
     autoResizeGuest: Bool,
-    gpuBudget: GPUBudgetParameters
+    gpuBudget: GPUBudgetParameters,
+    linuxGraphicalBoot: Bool
 ) -> Int32 {
     boot.withCPaths { paths in
         var request = kernarium_runtime_boot()
@@ -888,6 +889,7 @@ private func runGuest(
         request.guest_memory_mib = guestMemoryMiB
         request.guest_processor_count = vCPUCount
         request.android_boot_mode = boot.androidBootMode.rawValue
+        request.linux_console_boot = linuxGraphicalBoot ? 0 : 1
         request.auto_resize_guest = autoResizeGuest ? 1 : 0
         request.gpu_budget_application_mib = gpuBudget.applicationMiB
         request.gpu_budget_engine_mib = gpuBudget.engineMiB
@@ -1108,6 +1110,7 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
         let vCPUCount = UInt32(configuration.vCPUCount)
         let dotsPerInch = geometry.dotsPerInch
         let autoResizeGuest = configuration.autoResizeGuest
+        let linuxGraphicalBoot = configuration.linuxGraphicalBoot
         // The run occupies its thread for the guest's whole life and the GPU
         // service reaches the main queue while it starts, so it must not be the
         // main thread. Own the thread outright rather than depending on where a
@@ -1125,7 +1128,8 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
                     guestMemoryMiB: guestMemoryMiB,
                     vCPUCount: vCPUCount,
                     autoResizeGuest: autoResizeGuest,
-                    gpuBudget: gpuBudget
+                    gpuBudget: gpuBudget,
+                    linuxGraphicalBoot: linuxGraphicalBoot
                 )
             }
             Task { @MainActor in
@@ -1162,9 +1166,16 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
         return run()
     }
 
-    /// A plain image boots read-only under a disposable overlay disk, which is
-    /// recreated every launch and holds no state worth keeping.
+    /// Starter GPT disks are writable and persist in Documents. Legacy EROFS
+    /// and sealed ext4 images retain their disposable overlay.
     private func prepareImageBoot(rootfs: URL) -> PreparedBoot? {
+        if rootfs.pathExtension.lowercased() == "img" {
+            guard FileManager.default.isWritableFile(atPath: rootfs.path) else {
+                print("Kernarium: the persistent GPT disk must be writable")
+                return nil
+            }
+            return PreparedBoot(rootfs: rootfs, overlay: nil)
+        }
         if rootfs.pathExtension.lowercased() == "ext4" {
             do {
                 try FileManager.default.setAttributes(

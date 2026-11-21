@@ -33,6 +33,7 @@ SKIP_BUILD=0
 ANDROID_AUTOMATION=0
 ONLY_TESTING=KernariumTests
 TEST_ENVIRONMENT=
+SIGNING_OPTIONS=
 
 fail()
 {
@@ -46,16 +47,16 @@ usage()
 		"Usage: Kernarium/scripts/run-ios-mac.sh [options]" \
 		"" \
 		"Options:" \
-		"  --rootfs PATH  EROFS or sealed ext4 image to copy into app" \
-		"                 Documents under its own name and select" \
-		"                 (default: the accepted KDE desktop image that" \
-		"                 Kernarium selects when its settings name none)" \
+		"  --rootfs PATH  Writable GPT .img, EROFS or sealed ext4 image" \
+		"                 to copy into Documents under its own name and select" \
+		"                 Existing .img disks in Documents are reused." \
 		"  --guest-bundle NAME  Assemble NAME.kern from the accepted" \
 		"                 Android release and select it; its writable disk" \
 		"                 is kept across runs" \
 		"  --artifact PATH  Accepted kernel artifact directory" \
 		"  --jobs NUMBER  Parallel build jobs (default: 4)" \
 		"  --no-build     Stage and launch the installed app as it stands" \
+		"  --ad-hoc       Sign a local Mac test with no developer account" \
 		"  --android-automation  Build and package the automation Android" \
 		"                 runtime, whose launch may turn ADB authorization off" \
 		"  --only-testing TEST  Run TEST instead of all of KernariumTests; the" \
@@ -90,6 +91,10 @@ while [ "$#" -gt 0 ]; do
 		[ "$#" -ge 2 ] || fail "--jobs requires a number"
 		JOBS=$2
 		shift 2
+		;;
+	--ad-hoc)
+		SIGNING_OPTIONS="CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= CODE_SIGNING_REQUIRED=NO"
+		shift
 		;;
 	--no-build)
 		SKIP_BUILD=1
@@ -132,18 +137,7 @@ $2"
 done
 
 if [ -z "$ROOTFS" ]; then
-	# Kernarium's default image (RootfsImage.defaultFilename) is the accepted
-	# KDE release that tools/rootfs/desktop/images.json records.
-	ROOTFS=$(python3 -B - "$ROOT_DIR/tools/rootfs/desktop/images.json" <<'PYTHON'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    accepted = json.load(handle)["images"]["kde"]["accepted"]
-print(f"{accepted['release']}/{accepted['file']}")
-PYTHON
-) || fail "cannot read the accepted KDE image from images.json"
-	ROOTFS="$ROOT_DIR/.build/rootfs/$ROOTFS"
+	ROOTFS="$ROOT_DIR/.build/rootfs/debian-13-phosh.img"
 fi
 [ -f "$ROOTFS" ] || fail "rootfs image is unavailable: $ROOTFS"
 # The image keeps its name in Documents, as the application's picker shows it,
@@ -151,8 +145,8 @@ fi
 ROOTFS_FILENAME=$(basename -- "$ROOTFS")
 case "$ROOTFS_FILENAME" in
 *[[:space:],:\"]*) fail "the image name cannot be a kernel argument: $ROOTFS_FILENAME" ;;
-*.erofs|*.ext4) ;;
-*) fail "rootfs must have an .erofs or .ext4 suffix: $ROOTFS" ;;
+*.erofs|*.ext4|*.img) ;;
+*) fail "rootfs must have an .erofs, .ext4 or .img suffix: $ROOTFS" ;;
 esac
 [ -d "$ARTIFACT" ] ||
 	fail "kernel artifact is unavailable: $ARTIFACT"
@@ -180,7 +174,7 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
 		cmake --preset "$ANDROID_PRESET"
 		cmake --build --preset "$ANDROID_PRESET" --parallel "$JOBS"
 	fi
-	"$ROOT_DIR/Kernarium/scripts/package-ios-frameworks.sh" $PACKAGE_OPTION
+	"$ROOT_DIR/Kernarium/scripts/package-ios-frameworks.sh" --runtimes linux $PACKAGE_OPTION
 	xcodebuild \
 		-project "$ROOT_DIR/Kernarium/Kernarium.xcodeproj" \
 		-scheme Kernarium \
@@ -188,7 +182,7 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
 		-destination "$DESTINATION" \
 		-derivedDataPath "$DERIVED_DATA" \
 		-jobs "$JOBS" \
-		build
+		$SIGNING_OPTIONS build
 	# The x86-64 JIT and the FEXCore it embeds are macOS-only.
 	python3 -B "$ROOT_DIR/scripts/check-no-fexcore.py" \
 		"$DERIVED_DATA/Build/Products" ||
@@ -248,14 +242,23 @@ if [ -z "$DATA_CONTAINER" ]; then
 		-jobs "$JOBS" \
 		-only-testing:KernariumTests \
 		ENABLE_TESTABILITY=YES \
-		test
+		$SIGNING_OPTIONS test
 	DATA_CONTAINER=$(resolve_container) ||
 		fail "macOS did not create a data container for $BUNDLE_ID"
 fi
 
 mkdir -p -- "$DATA_CONTAINER/Documents"
-rm -f -- "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME"
-cp "$ROOTFS" "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME"
+case "$ROOTFS_FILENAME" in
+*.img)
+	if [ ! -e "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME" ]; then
+		cp "$ROOTFS" "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME"
+	fi
+	;;
+*)
+	rm -f -- "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME"
+	cp "$ROOTFS" "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME"
+	;;
+esac
 case "$ROOTFS_FILENAME" in
 *.ext4) chmod 0444 "$DATA_CONTAINER/Documents/$ROOTFS_FILENAME" ;;
 esac
@@ -324,4 +327,4 @@ exec env "$@" xcodebuild \
 	-jobs "$JOBS" \
 	-only-testing:"$ONLY_TESTING" \
 	ENABLE_TESTABILITY=YES \
-	test
+	$SIGNING_OPTIONS test
