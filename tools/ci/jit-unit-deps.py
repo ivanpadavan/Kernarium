@@ -47,10 +47,19 @@ def main():
     manifest = work / 'manifest.tsv'
     with manifest.open('w') as output:
         writer = csv.writer(output, delimiter='\t', lineterminator='\n')
-        writer.writerows([header, row])
+        writer.writerow(header)
+        # The preparer's inventory check covers every patch series, even
+        # when its product selector materializes only one dependency.
+        for entry in rows:
+            if len(entry) != len(header) or entry[0] == 'name':
+                continue
+            selected = list(entry)
+            if selected[0] == 'zlib':
+                selected[2] += ',jit-unit-zlib'
+            writer.writerow(selected)
     environment = {**os.environ, 'UML_DEPENDENCY_MANIFEST': str(manifest)}
-    run(str(ROOT / 'dependencies/prepare.sh'), '--product', 'macos', env=environment)
-    run(str(ROOT / 'dependencies/prepare.sh'), '--product', 'macos', '--verify', env=environment)
+    run(str(ROOT / 'dependencies/prepare.sh'), '--product', 'jit-unit-zlib', env=environment)
+    run(str(ROOT / 'dependencies/prepare.sh'), '--product', 'jit-unit-zlib', '--verify', env=environment)
     run('cmake', '-S', str(ROOT / 'external/sources/zlib'), '-B', str(work / 'build'), '-G', 'Ninja',
         '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_INSTALL_PREFIX=' + str(PREFIX),
         '-DCMAKE_OSX_SYSROOT=' + capture('xcrun', '--sdk', 'macosx', '--show-sdk-path'),
