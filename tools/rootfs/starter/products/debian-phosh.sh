@@ -132,6 +132,9 @@ favorite-apps=['org.gnome.Console.desktop']
 
 [org/gnome/desktop/input-sources]
 sources=[('xkb', 'us'), ('xkb', 'ru')]
+
+[org/gnome/desktop/a11y/applications]
+screen-keyboard-enabled=true
 EOF
 	as_root chroot "$root" dconf update
 }
