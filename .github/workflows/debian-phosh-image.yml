@@ -74,26 +74,28 @@ jobs:
       kind: ${{ matrix.kind }}
       input_key: ${{ matrix.kind == 'phosh' && needs.inputs.outputs.phosh_key || needs.inputs.outputs.minimal_key }}
       base_key: ${{ needs.inputs.outputs.base_key }}
-'on':
-  push:
-    branches:
-    - debian-phosh
-  workflow_dispatch: null
-
   timings:
     if: always()
-    needs: [inputs, base, image]
+    needs:
+    - inputs
+    - base
+    - image
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - name: Report actual stage durations
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 -B tools/ci/debian-run-report.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: img-stage-times
-          path: debian-stage-times.json
+    - uses: actions/checkout@v4
+    - name: Report actual stage durations
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 -B tools/ci/debian-run-report.py
+    - uses: actions/upload-artifact@v4
+      with:
+        name: img-stage-times
+        path: debian-stage-times.json
+'on':
+  push:
+    branches:
+    - debian-phosh
+  workflow_dispatch: null
