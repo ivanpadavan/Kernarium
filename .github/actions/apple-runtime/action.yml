@@ -1,0 +1,168 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Verified Apple Linux runtime
+description: Reuse compatible product prefixes and package a verified Linux runtime.
+inputs:
+  platform:
+    required: true
+    description: ios or ios-simulator
+  sdk:
+    required: true
+    description: device or simulator
+  platform-directory:
+    required: true
+    description: ios-device-arm64 or ios-simulator-arm64
+  legacy-prefix:
+    required: true
+    description: ios or sim
+outputs:
+  runtime-key:
+    description: Verified runtime source and artifact input identity
+    value: ${{ steps.runtime-key.outputs.key }}
+runs:
+  using: composite
+  steps:
+  - name: Select Xcode 27 and install build tools
+    run: |
+      test "$(uname -m)" = arm64
+      XCODE_PATH=$(python3 -c 'import pathlib; p=sorted(pathlib.Path("/Applications").glob("Xcode_27*.app")); print(p[-1] if p else "/Applications/Xcode.app")')
+      sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+      xcodebuild -version
+      xcrun --sdk iphoneos --show-sdk-version | awk -F. '$1 >= 27 { ok=1 } END { exit !ok }'
+      xcodebuild -downloadComponent MetalToolchain
+      brew install cmake ninja make meson pkgconf autoconf automake libtool \
+        gettext gperf groff bison flex rsync
+      echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+      echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+      echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
+      echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+    shell: bash
+  - name: Install documented Python GPU build tools
+    run: |
+      python3 -m venv .build/gpu-tools-venv
+      .build/gpu-tools-venv/bin/python -m pip install meson Mako PyYAML packaging
+      # The GPU builder intentionally narrows PATH to this tool directory.
+      ln -s "$(brew --prefix bison)/bin/bison" .build/gpu-tools-venv/bin/bison
+      ln -s "$(brew --prefix flex)/bin/flex" .build/gpu-tools-venv/bin/flex
+      echo "$PWD/.build/gpu-tools-venv/bin" >> "$GITHUB_PATH"
+    shell: bash
+  - name: Fingerprint product source and build inputs
+    id: keys
+    shell: bash
+    run: |
+      echo "legacy=$(tools/ci/apple-toolchain-key.sh)" >> "$GITHUB_OUTPUT"
+      for product in gpu network storage compression; do
+        echo "$product=$(python3 -B tools/ci/apple-product-key.py --product "$product" --platform "${{ inputs.platform }}")" >> "$GITHUB_OUTPUT"
+      done
+      echo "sources=$(python3 -B tools/ci/debian-inputs.py --component sources-${{ inputs.platform }})" >> "$GITHUB_OUTPUT"
+  - uses: actions/cache/restore@v4
+    id: ios-sources
+    with:
+      path: |
+        external/sources
+        .build/dependency-cache
+      key: apple-sources-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.sources }}
+      restore-keys: |-
+        sim-sources-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/**', 'tools/rootfs/vulkan/**', 'scripts/patch_series.py') }}
+        ios-sources-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/**', 'tools/rootfs/vulkan/**', 'scripts/patch_series.py') }}
+  - name: Prepare and verify pinned iOS sources
+    run: |
+      if ! git var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+        git config --global user.name "$(git log -1 --format=%cn)"
+        git config --global user.email "$(git log -1 --format=%ce)"
+      fi
+      for product in apple-gpu-vulkan-experiment ios-network ios-storage ios-compression; do
+        dependencies/prepare.sh --product "$product"
+      done
+      if [ "${{ inputs.platform }}" = ios-simulator ]; then
+        dependencies/prepare.sh --archive-manifest dependencies/llvm/archives.tsv
+      fi
+    shell: bash
+  - uses: actions/cache/save@v4
+    if: steps.ios-sources.outputs.cache-hit != 'true'
+    with:
+      path: |
+        external/sources
+        .build/dependency-cache
+      key: ${{ steps.ios-sources.outputs.cache-primary-key }}
+  - uses: actions/cache/restore@v4
+    id: ios-gpu
+    with:
+      path: .build/dependencies/apple-gpu-vulkan-experiment/${{ inputs.platform-directory }}
+      key: apple-gpu-v2-${{ inputs.platform }}-${{ runner.arch }}-${{ steps.keys.outputs.gpu }}
+      restore-keys: ${{ inputs.legacy-prefix }}-gpu-v1-${{ runner.arch }}-${{ steps.keys.outputs.legacy }}-${{ hashFiles('dependencies/**', 'tools/rootfs/vulkan/**', 'tools/ci/apple-toolchain-key.sh') }}
+  - name: Build or fully verify iOS gpu dependencies
+    run: dependencies/build-apple-gpu.sh --platform ${{ inputs.platform }} --jobs 3
+    shell: bash
+  - uses: actions/cache/save@v4
+    if: steps.ios-gpu.outputs.cache-hit != 'true'
+    with:
+      path: .build/dependencies/apple-gpu-vulkan-experiment/${{ inputs.platform-directory }}
+      key: ${{ steps.ios-gpu.outputs.cache-primary-key }}
+  - uses: actions/cache/restore@v4
+    id: ios-network
+    with:
+      path: .build/dependencies/${{ inputs.platform-directory }}/network
+      key: apple-network-v2-${{ inputs.platform }}-${{ runner.arch }}-${{ steps.keys.outputs.network }}
+      restore-keys: ${{ inputs.legacy-prefix }}-network-v1-${{ runner.arch }}-${{ steps.keys.outputs.legacy }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh') }}
+  - name: Build or fully verify iOS network dependencies
+    run: dependencies/build-ios-network.sh --platform ${{ inputs.platform }} --jobs 3
+    shell: bash
+  - uses: actions/cache/save@v4
+    if: steps.ios-network.outputs.cache-hit != 'true'
+    with:
+      path: .build/dependencies/${{ inputs.platform-directory }}/network
+      key: ${{ steps.ios-network.outputs.cache-primary-key }}
+  - uses: actions/cache/restore@v4
+    id: ios-storage
+    with:
+      path: .build/dependencies/ios-storage
+      key: apple-storage-v2-${{ runner.arch }}-${{ steps.keys.outputs.storage }}
+      restore-keys: ios-storage-v1-${{ runner.arch }}-${{ steps.keys.outputs.legacy }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh') }}
+  - name: Build or fully verify iOS storage dependencies
+    run: dependencies/build-ios-storage.sh
+    shell: bash
+  - uses: actions/cache/save@v4
+    if: steps.ios-storage.outputs.cache-hit != 'true'
+    with:
+      path: .build/dependencies/ios-storage
+      key: ${{ steps.ios-storage.outputs.cache-primary-key }}
+  - uses: actions/cache/restore@v4
+    id: ios-compression
+    with:
+      path: .build/dependencies/ios-zstd
+      key: apple-compression-v2-${{ runner.arch }}-${{ steps.keys.outputs.compression }}
+      restore-keys: ios-compression-v1-${{ runner.arch }}-${{ steps.keys.outputs.legacy }}-${{ hashFiles('dependencies/**', 'tools/ci/apple-toolchain-key.sh') }}
+  - name: Build or fully verify iOS compression dependencies
+    run: dependencies/build-ios-zstd.sh
+    shell: bash
+  - uses: actions/cache/save@v4
+    if: steps.ios-compression.outputs.cache-hit != 'true'
+    with:
+      path: .build/dependencies/ios-zstd
+      key: ${{ steps.ios-compression.outputs.cache-primary-key }}
+  - name: Fingerprint packaged runtime inputs
+    id: runtime-key
+    shell: bash
+    run: |
+      RUNTIME_SOURCE=$(python3 -B tools/ci/debian-inputs.py --component runtime)
+      KEY=$(printf '%s\n' "$RUNTIME_SOURCE" "${{ steps.keys.outputs.gpu }}" "${{ steps.keys.outputs.network }}" "${{ steps.keys.outputs.storage }}" "${{ steps.keys.outputs.compression }}" "$CI_KERNEL_SHA256" "$CI_BOOT_BASE_SHA256" "${{ inputs.platform }}" | shasum -a 256 | awk '{print $1}')
+      echo "key=$KEY" >> "$GITHUB_OUTPUT"
+  - uses: actions/cache/restore@v4
+    id: runtime-cache
+    with:
+      path: .build/kernarium-xcframeworks
+      key: apple-runtime-v2-${{ inputs.sdk }}-${{ steps.runtime-key.outputs.key }}
+  - name: Build the Linux runtime from accepted inputs
+    shell: bash
+    run: |
+      sh tools/ci/build-apple-runtime.sh "${{ inputs.sdk }}"
+      python3 -B tools/ci/debian-artifacts.py record --root .build/kernarium-xcframeworks --kind apple-runtime --key "${{ steps.runtime-key.outputs.key }}"
+    if: steps.runtime-cache.outputs.cache-hit != 'true'
+  - name: Verify packaged runtime hashes and provenance
+    shell: bash
+    run: python3 -B tools/ci/debian-artifacts.py verify --root .build/kernarium-xcframeworks --kind apple-runtime --key "${{ steps.runtime-key.outputs.key }}"
+  - uses: actions/cache/save@v4
+    if: steps.runtime-cache.outputs.cache-hit != 'true'
+    with:
+      path: .build/kernarium-xcframeworks
+      key: ${{ steps.runtime-cache.outputs.cache-primary-key }}

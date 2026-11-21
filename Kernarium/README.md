@@ -126,6 +126,18 @@ publishes its destination only after a complete decode.
 
 ## Guest boot
 
+Storage can schedule a larger capacity for a persistent GPT disk before its
+next launch. Growth verifies a sparse copy before atomically replacing the
+disk; the boot ramdisk then expands ext4. A failure leaves the original disk
+available to boot.
+
+In graphical mode, explicit clipboard actions transfer text between iOS and
+the guest's Wayland clipboard through the image's host-only session service.
+They never type into the guest. The key panel offers latched modifiers and
+special keys and releases modifiers on a view-mode change. A long press in the
+serial console opens native text selection for the current scroll position;
+terminal grid changes reach the guest's serial TTY through the same service.
+
 A Linux run boots the base archive the runtime embeds
 ([`tools/rootfs/boot-ramdisk`](../tools/rootfs/boot-ramdisk/README.md))
 followed by a segment holding the generic per-run `/init` and its

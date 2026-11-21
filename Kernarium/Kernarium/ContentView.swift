@@ -8,6 +8,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var serialConsole = SerialConsoleController()
+    @StateObject private var clipboard = GuestClipboard()
     @ObservedObject private var launcher = EmulatorLauncher.shared
     @ObservedObject private var backgroundSession = BackgroundSession.shared
     @ObservedObject private var backgroundJob = BackgroundJob.shared
@@ -20,6 +21,7 @@ struct ContentView: View {
     /// mode sets it; the serial console's keyboard is its terminal's focus.
     @State private var framebufferKeyboardVisible = false
     @State private var specialKeysExpanded = false
+    @State private var heldModifiers: Set<GuestModifier> = []
     @State private var settingsPresented = false
     /// Whether the window scene fills the screen. Until the view is in a
     /// scene, it is taken to be a window, which is the system's own default.
@@ -35,7 +37,8 @@ struct ContentView: View {
 
                 GuestDisplayView(
                     keyboardVisible: $framebufferKeyboardVisible,
-                    scale: EmulatorLauncher.shared.displayScale
+                    scale: EmulatorLauncher.shared.displayScale,
+                    textModifierCodes: Set(heldModifiers.map(\.rawValue))
                 ) { view, geometry in
                     EmulatorLauncher.shared.start(view: view, geometry: geometry)
                 }
@@ -52,7 +55,17 @@ struct ContentView: View {
                     .allowsHitTesting(guestViewMode == .serialConsole)
                     .accessibilityHidden(guestViewMode != .serialConsole)
 
-                if let refusal = launcher.memoryRefusal {
+                if let progress = launcher.diskPreparation {
+                    ProgressView(progress).padding().background(.regularMaterial, in: .rect(cornerRadius: 12))
+                } else if let error = launcher.diskPreparationError {
+                    VStack(spacing: 12) {
+                        Text("The disk could not be enlarged").font(.headline)
+                        Text(error)
+                        Button("Try again") { launcher.retryDiskGrowth() }
+                        Button("Start at current capacity") { launcher.continueWithoutDiskGrowth() }
+                    }
+                    .padding().background(.regularMaterial, in: .rect(cornerRadius: 12))
+                } else if let refusal = launcher.memoryRefusal {
                     MemoryRefusalNotice(
                         reason: refusal,
                         sizesOffered: EmulatorConfiguration
@@ -125,6 +138,14 @@ struct ContentView: View {
         .sheet(isPresented: $settingsPresented) {
             EmulatorSettingsView()
         }
+        .alert("Clipboard", isPresented: Binding(
+            get: { clipboard.message != nil },
+            set: { if !$0 { clipboard.message = nil } }
+        )) {
+            Button("OK") { clipboard.message = nil }
+        } message: {
+            Text(clipboard.message ?? "")
+        }
         .onAppear {
             serialConsole.startObserving()
             let window = GuestPictureInPicture.shared
@@ -141,6 +162,7 @@ struct ContentView: View {
             )
         }
         .onDisappear {
+            releaseModifiers()
             serialConsole.stopObserving()
             GuestPersistence.shared.stopObserving()
             GuestPictureInPicture.shared.guestRunningChanged(false)
@@ -167,6 +189,7 @@ struct ContentView: View {
             // The screen over the guest says why it is paused, and a sheet
             // or a keyboard would cover it.
             guard paused else { return }
+            releaseModifiers()
             settingsPresented = false
             framebufferKeyboardVisible = false
             serialConsole.resignFirstResponder()
@@ -178,6 +201,7 @@ struct ContentView: View {
             // Nothing is left to type into, and the keyboard would cover
             // the notice.
             guard case .ended = phase else { return }
+            releaseModifiers()
             framebufferKeyboardVisible = false
             serialConsole.resignFirstResponder()
         }
@@ -198,7 +222,10 @@ struct ContentView: View {
             }
             displayModeButton
             keyboardButton
-            specialKeysRow
+            if guestViewMode == .framebuffer {
+                clipboardButton
+                specialKeysRow
+            }
         }
     }
 
@@ -302,12 +329,36 @@ struct ContentView: View {
     }
 
     private var specialKeysRow: some View {
-        HStack(spacing: FloatingControlMetrics.spacing) {
+        VStack(alignment: .trailing, spacing: FloatingControlMetrics.spacing) {
             if specialKeysExpanded {
-                ForEach(GuestSpecialKey.allCases) { key in
-                    specialKeyButton(key)
+                HStack(spacing: FloatingControlMetrics.spacing) {
+                    ForEach(GuestModifier.allCases) { modifier in
+                        Button(modifier.title) { toggleModifier(modifier) }
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 48, height: 40)
+                            .glassEffect(heldModifiers.contains(modifier) ? .regular.tint(.accentColor) : .regular)
+                            .accessibilityIdentifier("guestModifier\(modifier.title)")
+                            .accessibilityValue(heldModifiers.contains(modifier) ? "On" : "Off")
+                    }
                 }
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+                HStack(spacing: 4) {
+                    ForEach([GuestSpecialKey.escape, .tab, .left, .up, .down, .right]) { key in
+                        specialKeyButton(key)
+                    }
+                }
+                HStack(spacing: 4) {
+                    ForEach([GuestSpecialKey.power, .volumeUp, .volumeDown, .home]) { key in
+                        specialKeyButton(key)
+                    }
+                }
+                HStack(spacing: 8) {
+                    Button("Ctrl+B") { chord(key: 48, modifiers: [.ctrl]) }
+                        .accessibilityIdentifier("guestTmuxPrefix")
+                    Button("Ctrl+Shift+V") { chord(key: 47, modifiers: [.ctrl, .shift]) }
+                        .accessibilityIdentifier("guestTerminalPaste")
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .padding(10).glassEffect(.regular, in: .capsule)
             }
             floatingIconButton(
                 systemName: specialKeysExpanded
@@ -323,6 +374,49 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private var clipboardButton: some View {
+        Menu {
+            Button("iPhone → Debian", systemImage: "arrow.down.doc") {
+                Task { await clipboard.phoneToGuest() }
+            }
+            .accessibilityIdentifier("clipboardPhoneToGuest")
+            Button("Debian → iPhone", systemImage: "arrow.up.doc") {
+                Task { await clipboard.guestToPhone() }
+            }
+            .accessibilityIdentifier("clipboardGuestToPhone")
+        } label: {
+            floatingIcon(systemName: "doc.on.clipboard")
+        }
+        .glassEffect(.regular.interactive(), in: .circle)
+        .disabled(clipboard.busy)
+        .accessibilityLabel("Clipboard")
+        .accessibilityIdentifier("clipboardButton")
+    }
+
+    private func toggleModifier(_ modifier: GuestModifier) {
+        if heldModifiers.remove(modifier) != nil {
+            kernarium_runtime_loader_send_key(modifier.rawValue, 0)
+        } else {
+            heldModifiers.insert(modifier)
+            kernarium_runtime_loader_send_key(modifier.rawValue, 1)
+        }
+    }
+
+    private func releaseModifiers() {
+        for modifier in heldModifiers {
+            kernarium_runtime_loader_send_key(modifier.rawValue, 0)
+        }
+        heldModifiers.removeAll()
+    }
+
+    private func chord(key: UInt16, modifiers: [GuestModifier]) {
+        releaseModifiers()
+        for modifier in modifiers { kernarium_runtime_loader_send_key(modifier.rawValue, 1) }
+        kernarium_runtime_loader_send_key(key, 1)
+        kernarium_runtime_loader_send_key(key, 0)
+        for modifier in modifiers.reversed() { kernarium_runtime_loader_send_key(modifier.rawValue, 0) }
     }
 
     private func specialKeyButton(_ key: GuestSpecialKey) -> some View {
@@ -379,6 +473,8 @@ struct ContentView: View {
     /// A mode switch puts the keyboard away: the view that held it is
     /// hidden, and no hidden view keeps keyboard focus.
     private func toggleGuestViewMode() {
+        releaseModifiers()
+        specialKeysExpanded = false
         switch guestViewMode {
         case .framebuffer:
             framebufferKeyboardVisible = false
@@ -395,6 +491,16 @@ enum GuestViewMode {
     case serialConsole
 
     static let defaultMode: Self = .framebuffer
+}
+
+enum GuestModifier: UInt16, CaseIterable, Identifiable {
+    case ctrl = 29
+    case shift = 42
+    case alt = 56
+    var id: Self { self }
+    var title: String {
+        switch self { case .ctrl: "Ctrl"; case .shift: "Shift"; case .alt: "Alt" }
+    }
 }
 
 /// How this launch's guest run ended, as the application reports it.
@@ -675,7 +781,7 @@ private struct GuestNoticeCard: View {
 }
 
 enum FloatingControlMetrics {
-    static let buttonSide: CGFloat = 32
+    static let buttonSide: CGFloat = 44
     static let spacing: CGFloat = 8
 }
 
@@ -686,6 +792,10 @@ enum GuestSpecialKey: UInt16, CaseIterable, Identifiable {
     case escape = 1
     case tab = 15
     case home = 102
+    case left = 105
+    case up = 103
+    case down = 108
+    case right = 106
 
     var id: Self { self }
     var code: UInt16 { rawValue }
@@ -704,6 +814,10 @@ enum GuestSpecialKey: UInt16, CaseIterable, Identifiable {
         case .escape: "escape"
         case .tab: "arrow.right.to.line"
         case .home: "house"
+        case .left: "arrow.left"
+        case .up: "arrow.up"
+        case .down: "arrow.down"
+        case .right: "arrow.right"
         }
     }
 
@@ -715,6 +829,10 @@ enum GuestSpecialKey: UInt16, CaseIterable, Identifiable {
         case .escape: "Escape"
         case .tab: "Tab"
         case .home: "Home"
+        case .left: "Left arrow"
+        case .up: "Up arrow"
+        case .down: "Down arrow"
+        case .right: "Right arrow"
         }
     }
 
@@ -726,6 +844,10 @@ enum GuestSpecialKey: UInt16, CaseIterable, Identifiable {
         case .escape: "guestEscapeButton"
         case .tab: "guestTabButton"
         case .home: "guestHomeButton"
+        case .left: "guestLeftButton"
+        case .up: "guestUpButton"
+        case .down: "guestDownButton"
+        case .right: "guestRightButton"
         }
     }
 }
@@ -942,6 +1064,9 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
     /// Set when the memory this launch states is a size the runtime refuses
     /// (`MemoryRefusal`): nothing started, and a relaunch is what starts it.
     @Published private(set) var memoryRefusal: String?
+    @Published private(set) var diskPreparation: String?
+    @Published private(set) var diskPreparationError: String?
+    private var skipsDiskGrowth = false
     private var restartIndicator = GuestRestartIndicator()
     /// The name the running guest's own settings are stored under.
     private(set) var runningGuestName: String?
@@ -1001,7 +1126,7 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
         view: GuestMetalView,
         geometry: GuestDisplayGeometry
     ) {
-        guard phase == .idle else { return }
+        guard phase == .idle, diskPreparation == nil, diskPreparationError == nil else { return }
         guard let rootfsFilename = RootfsImage.selectedFilename(
             configuredFilename: configuration.rootfsFilename
         ) else {
@@ -1046,6 +1171,28 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
         }
         refusedStart = nil
         if startShortage != nil { startShortage = nil }
+        if case let .image(rootfs, _) = selection,
+           rootfs.pathExtension.lowercased() == "img", !skipsDiskGrowth,
+           let target = DiskGrowthSettings.pending(filename: rootfsFilename) {
+            refusedStart = (view, geometry)
+            diskPreparation = "Increasing disk capacity…"
+            Task {
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        if target > (try PersistentDisk.capacity(rootfs)) {
+                            try PersistentDisk.grow(rootfs, to: target)
+                        }
+                    }.value
+                    DiskGrowthSettings.schedule(bytes: nil, filename: rootfsFilename)
+                    diskPreparation = nil
+                    start(view: view, geometry: geometry)
+                } catch {
+                    diskPreparation = nil
+                    diskPreparationError = error.localizedDescription + " The original disk is unchanged."
+                }
+            }
+            return
+        }
         runningGuestName = rootfsFilename
         runningGuestIsAndroid = selection.flavor == .android
         guard kernarium_runtime_loader_select(
@@ -1279,6 +1426,16 @@ final class EmulatorLauncher: ObservableObject, SpaceRun {
     func retryStart() {
         guard let (view, geometry) = refusedStart else { return }
         start(view: view, geometry: geometry)
+    }
+
+    func retryDiskGrowth() {
+        diskPreparationError = nil
+        retryStart()
+    }
+
+    func continueWithoutDiskGrowth() {
+        skipsDiskGrowth = true
+        retryDiskGrowth()
     }
 
     func dismissGPUBudgetWarning() {

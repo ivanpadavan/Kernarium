@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Debian IPA
+on:
+  push:
+    branches: [debian-phosh]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: debian-ipa-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.plan.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          BEFORE=${BEFORE:-$(git rev-parse HEAD^)}
+          python3 -B tools/ci/debian-inputs.py --before "$BEFORE" --output plan.json --github-output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipa-input-plan
+          path: plan.json
+  build:
+    needs: inputs
+    if: needs.inputs.outputs.app == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: device
+            platform: ios
+            directory: ios-device-arm64
+            legacy: ios
+          - sdk: simulator
+            platform: ios-simulator
+            directory: ios-simulator-arm64
+            legacy: sim
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: debian-ipa-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reuse accepted kernel and boot base with source and digest verification
+        run: python3 -B tools/ci/stage-debian-runtime.py
+      - uses: ./.github/actions/apple-runtime
+        with:
+          sdk: ${{ matrix.sdk }}
+          platform: ${{ matrix.platform }}
+          platform-directory: ${{ matrix.directory }}
+          legacy-prefix: ${{ matrix.legacy }}
+      - name: Build unsigned device application
+        if: matrix.sdk == 'device'
+        run: |
+          xcodebuild -project Kernarium/Kernarium.xcodeproj -scheme Kernarium -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath "$PWD/.build/iphone-derived" -jobs 3 \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          mkdir -p .build/ipa/Payload
+          cp -R .build/iphone-derived/Build/Products/Release-iphoneos/Kernarium.app .build/ipa/Payload/
+          (cd .build/ipa && zip -qry "$RUNNER_TEMP/Kernarium-Debian.ipa" Payload)
+          unzip -t "$RUNNER_TEMP/Kernarium-Debian.ipa"
+          python3 - <<'PY'
+          import zipfile, os
+          from pathlib import Path
+          with zipfile.ZipFile(Path(os.environ['RUNNER_TEMP']) / 'Kernarium-Debian.ipa') as archive:
+              names = archive.namelist()
+              assert 'Payload/Kernarium.app/Kernarium' in names
+              assert any('/KRuntime_6_18_4K.framework/' in n for n in names)
+          PY
+          gh release create "$TAG" --target "$GITHUB_SHA" --draft --title 'Kernarium Debian IPA' \
+            --notes 'Unsigned iOS 27+ application. Integrity checked; Simulator tests are running. IMG is delivered separately.'
+          gh release upload "$TAG" "$RUNNER_TEMP/Kernarium-Debian.ipa"
+      - name: Build the matching Simulator test host
+        if: matrix.sdk == 'simulator'
+        run: |
+          xcodebuild build-for-testing -project Kernarium/Kernarium.xcodeproj -scheme Kernarium -configuration Release \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$PWD/.build/simulator-derived" -jobs 3 \
+            ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64
+          python3 -B tools/ci/debian-artifacts.py record --root .build/simulator-derived/Build/Products --kind app-test-host --key "$GITHUB_SHA"
+          tar -C .build/simulator-derived/Build -czf "$RUNNER_TEMP/debian-app-test-host.tar.gz" Products
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.sdk }}
+          path: |
+            ${{ runner.temp }}/Kernarium-Debian.ipa
+            ${{ runner.temp }}/debian-app-test-host.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+  tests:
+    needs: build
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: debian-ipa-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-simulator
+          path: ${{ runner.temp }}/host
+      - name: Verify the matching app host and make it available in the draft
+        run: |
+          XCODE_PATH=$(python3 -c 'import pathlib; p=sorted(pathlib.Path("/Applications").glob("Xcode_27*.app")); print(p[-1] if p else "/Applications/Xcode.app")')
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          mkdir -p .build/test-host
+          tar -C .build/test-host -xzf "$RUNNER_TEMP/host/debian-app-test-host.tar.gz"
+          python3 -B tools/ci/debian-artifacts.py verify --root .build/test-host/Products --kind app-test-host --key "$GITHUB_SHA"
+          gh release upload "$TAG" "$RUNNER_TEMP/host/debian-app-test-host.tar.gz"
+      - name: Clipboard, native selection and terminal resize tests
+        run: python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --suite DebianAppTests --output "$RUNNER_TEMP/app-results"
+      - name: Fetch a previously boot-qualified Phosh disk without building any image
+        run: python3 -B tools/ci/qualified-debian-image.py --output "$RUNNER_TEMP/golden-image"
+      - name: Preserve the original real Phosh-to-console persistence smoke
+        run: |
+          rm -f .build/test-host/Products/selected.xctestrun
+          python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite PersistentDebianTests --output "$RUNNER_TEMP/persistent-results"
+      - name: Publish only after all required app checks pass
+        run: |
+          gh release upload "$TAG" "$RUNNER_TEMP/golden-image/qualification.json"
+          gh release edit "$TAG" --draft=false --prerelease --notes 'Unsigned iOS 27+ IPA; integrity, app tests and real Phosh/console persistence smoke passed in the matching Simulator build. IMG has its own release. Physical iPhone gesture and device runtime checks remain required.'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ipa-test-diagnostics
+          path: |
+            ${{ runner.temp }}/app-results/
+            ${{ runner.temp }}/persistent-results/
+          if-no-files-found: warn

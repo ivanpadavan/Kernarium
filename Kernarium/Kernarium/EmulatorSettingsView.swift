@@ -11,6 +11,8 @@ struct EmulatorSettingsView: View {
     @State private var configuration: EmulatorConfiguration
     @State private var backgroundMode: BackgroundMode
     @State private var backgroundLimitMinutes: Int
+    @State private var diskCapacityBytes: UInt64 = 0
+    @State private var diskTargetGiB = 0
 
     private let maximumVCPUCount: Int
     private let defaults: UserDefaults
@@ -141,12 +143,14 @@ struct EmulatorSettingsView: View {
                         .accessibilityIdentifier("guestMemoryLimitNote")
                     }
 
-                    Stepper(
-                        "Overlay FS: \(configuration.overlaySizeGiB) GiB",
-                        value: $configuration.overlaySizeGiB,
-                        in: EmulatorConfiguration.overlaySizeRangeGiB
-                    )
-                    .accessibilityIdentifier("overlaySizeStepper")
+                    if !androidBundleSelected && !persistentImageSelected {
+                        Stepper(
+                            "Overlay FS: \(configuration.overlaySizeGiB) GiB",
+                            value: $configuration.overlaySizeGiB,
+                            in: EmulatorConfiguration.overlaySizeRangeGiB
+                        )
+                        .accessibilityIdentifier("overlaySizeStepper")
+                    }
                 }
 
                 // Unlike the rest of the form this applies at once, whatever
@@ -193,6 +197,20 @@ struct EmulatorSettingsView: View {
                         }
                     }
                     .accessibilityIdentifier("rootfsPicker")
+
+                    if persistentImageSelected {
+                        Text("Current capacity: \(Formats.size(bytes: diskCapacityBytes))")
+                            .accessibilityIdentifier("persistentDiskCapacity")
+                        Picker("Increase disk to", selection: $diskTargetGiB) {
+                            Text("Keep current capacity").tag(0)
+                            ForEach(growthChoices, id: \.self) { size in
+                                Text("\(size) GiB").tag(size)
+                            }
+                        }
+                        .accessibilityIdentifier("persistentDiskSizePicker")
+                        Text("The disk grows before the next guest boot. Existing files are kept.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
 
                     if androidBundleSelected {
                         Stepper(
@@ -274,6 +292,7 @@ struct EmulatorSettingsView: View {
             }
             .navigationTitle("Emulator settings")
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: configuration.rootfsFilename) { refreshDiskCapacity() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -292,6 +311,12 @@ struct EmulatorSettingsView: View {
 
     private func save() {
         configuration.save(defaults: defaults)
+        if persistentImageSelected {
+            DiskGrowthSettings.schedule(
+                bytes: diskTargetGiB > 0 ? UInt64(diskTargetGiB) * PersistentDisk.gib : nil,
+                filename: configuration.rootfsFilename, defaults: defaults
+            )
+        }
         let background = BackgroundSettings(defaults: defaults)
         background.setMode(
             backgroundMode,
@@ -302,5 +327,23 @@ struct EmulatorSettingsView: View {
             forGuest: configuration.rootfsFilename
         )
         dismiss()
+    }
+
+    private var persistentImageSelected: Bool {
+        (configuration.rootfsFilename as NSString).pathExtension.lowercased() == "img"
+    }
+
+    private var growthChoices: [Int] {
+        let next = Int(diskCapacityBytes / PersistentDisk.gib) + 1
+        return Set([next, next + 1, 8, 12, 16, 24, 32, 48, 64, 128, 256, 512, 1024, diskTargetGiB])
+            .filter { $0 > 0 && UInt64($0) * PersistentDisk.gib > diskCapacityBytes }
+            .sorted()
+    }
+
+    private func refreshDiskCapacity() {
+        guard persistentImageSelected else { diskCapacityBytes = 0; diskTargetGiB = 0; return }
+        let image = documentsDirectory.appendingPathComponent(configuration.rootfsFilename)
+        diskCapacityBytes = (try? PersistentDisk.capacity(image)) ?? 0
+        diskTargetGiB = Int((DiskGrowthSettings.pending(filename: configuration.rootfsFilename, defaults: defaults) ?? 0) / PersistentDisk.gib)
     }
 }

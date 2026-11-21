@@ -9,8 +9,8 @@ import UIKit
 /// The guest serial console, rendered by Ghostty over a host-managed byte
 /// stream: guest output is fed to the terminal, and the bytes the terminal
 /// produces (encoded keys, pastes, and replies to the guest's queries) are
-/// written back to the guest. No process is spawned, and the console has no
-/// window size of its own, so terminal resizes are not forwarded.
+/// written back to the guest. Grid changes reach ttyS0 through the guest
+/// session service; no process is spawned on the host.
 @MainActor
 final class SerialConsoleController: ObservableObject {
     /// Receives the bytes the terminal sends to the guest. Ghostty calls it
@@ -43,6 +43,8 @@ final class SerialConsoleController: ObservableObject {
     /// Output that arrived while no terminal surface existed. The session
     /// itself would keep only the newest 1 MiB of it.
     private var pendingOutput = Data()
+    private var transcript = Data()
+    private var transcriptURL: URL?
     private var isObserving = false
     /// Whether the terminal has keyboard focus, and with it the key bar and
     /// any software keyboard. A tap on the terminal changes it as well as
@@ -50,14 +52,26 @@ final class SerialConsoleController: ObservableObject {
     @Published private(set) var isFocused = false
 
     convenience init() {
-        self.init(input: { SerialConsoleController.sendToGuest($0) })
+        self.init(input: { SerialConsoleController.sendToGuest($0) }, resize: { rows, columns in
+            Task { @MainActor in
+                GuestTerminalGeometry.shared.resize(rows: rows, columns: columns)
+            }
+        })
+        transcriptURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("debian-boot.log")
+        if let transcriptURL { try? Data().write(to: transcriptURL) }
         startObserving()
     }
 
     /// Creates a console whose input goes to `input` and which does not
     /// observe the runtime until `startObserving()` is called.
-    init(input: @escaping InputSink) {
-        session = InMemoryTerminalSession(write: input, resize: { _ in })
+    init(
+        input: @escaping InputSink,
+        resize: @escaping @Sendable (Int, Int) -> Void = { _, _ in }
+    ) {
+        session = InMemoryTerminalSession(write: input, resize: { viewport in
+            resize(Int(viewport.rows), Int(viewport.columns))
+        }, suppressesPixelOnlyResizes: true)
         terminal = TerminalController(
             configuration: Self.terminalConfiguration,
             theme: Self.terminalTheme
@@ -118,6 +132,11 @@ final class SerialConsoleController: ObservableObject {
 
     func receive(_ data: Data) {
         guard !data.isEmpty else { return }
+        if let transcriptURL {
+            transcript.append(data)
+            if transcript.count > 2_000_000 { transcript = Data(transcript.suffix(1_000_000)) }
+            try? transcript.write(to: transcriptURL, options: .atomic)
+        }
         guard terminalView?.surface != nil else {
             pendingOutput.append(data)
             return
@@ -152,6 +171,16 @@ extension SerialConsoleController: TerminalSurfaceLifecycleDelegate {
 extension SerialConsoleController: TerminalSurfaceOpenURLDelegate {
     /// Links in guest output are not opened on the host.
     func terminalDidRequestOpenURL(_: String, kind _: TerminalOpenURLKind) {}
+}
+
+extension SerialConsoleController: TerminalSurfaceTextSelectionRequestDelegate {
+    func terminalDidRequestTextSelection(_ request: TerminalTextSelectionRequest) {
+        guard let terminalView, let presenter = terminalView.window?.rootViewController else { return }
+        var top = presenter
+        while let presented = top.presentedViewController { top = presented }
+        let selection = ConsoleTextSelectionController(text: request.text, range: request.anchorRange)
+        top.present(UINavigationController(rootViewController: selection), animated: true)
+    }
 }
 
 extension SerialConsoleController: TerminalSurfaceFocusDelegate {

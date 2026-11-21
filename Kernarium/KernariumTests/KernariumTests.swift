@@ -49,7 +49,7 @@ struct KernariumTests {
     @Test
     @MainActor
     func floatingControlsAndSpecialKeysHaveExpectedGeometryAndCodes() {
-        #expect(FloatingControlMetrics.buttonSide == 32)
+        #expect(FloatingControlMetrics.buttonSide >= 44)
         #expect(GuestViewMode.defaultMode == .framebuffer)
         #expect(UIImage(systemName: "terminal") != nil)
         #expect(UIImage(systemName: "display") != nil)
@@ -59,6 +59,10 @@ struct KernariumTests {
         #expect(GuestSpecialKey.escape.code == 1)
         #expect(GuestSpecialKey.tab.code == 15)
         #expect(GuestSpecialKey.home.code == 102)
+        #expect(GuestSpecialKey.left.code == 105)
+        #expect(GuestSpecialKey.right.code == 106)
+        #expect(GuestSpecialKey.up.code == 103)
+        #expect(GuestSpecialKey.down.code == 108)
         for key in GuestSpecialKey.allCases {
             #expect(UIImage(systemName: key.systemName) != nil)
         }
