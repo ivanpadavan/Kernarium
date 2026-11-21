@@ -37,7 +37,7 @@ struct DebianMobileTests {
     private func visible(_ markers: [String], in view: TerminalView, named name: String) async throws {
         var lastImage: UIImage?
         var lastText = ""
-        let found = try await eventually(within: .seconds(30)) {
+        let found = try await eventually(within: .seconds(30), every: .milliseconds(250)) {
             guard let image = view.snapshotImage(), let cgImage = image.cgImage else { return false }
             lastImage = image
             let request = VNRecognizeTextRequest()
@@ -50,6 +50,23 @@ struct DebianMobileTests {
         }
         if let png = lastImage?.pngData() { Attachment.record(png, named: name + ".png") }
         try #require(found, "The visible terminal did not show \(markers): OCR=\(lastText)")
+    }
+
+    private func tmuxCommand(_ text: String, in console: SerialConsoleController) async throws {
+        func promptVisible() -> Bool {
+            (console.session.readViewportText() ?? "").components(separatedBy: "\n").contains {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix(":")
+            }
+        }
+        send("\u{02}:")
+        // Synchronize input with tmux's prompt. Pixel assertions below are
+        // the proof of visible panes; this buffer check is readiness only.
+        try #require(try await eventually(within: .seconds(30)) {
+            promptVisible()
+        }, "Ctrl+B did not open the tmux command prompt")
+        send(text + "\n")
+        try #require(try await eventually(within: .seconds(30)) { !promptVisible() },
+                     "tmux did not finish its command prompt")
     }
 
     @Test(.enabled(if: DebianMobileTests.requested), .timeLimit(.minutes(15)))
@@ -91,13 +108,11 @@ struct DebianMobileTests {
                           marker: "GRID_portrait_OK", output: output)
         // The pane markers and status are verified from Metal-rendered
         // screenshots. No tmux capture-pane output participates in this check.
-        send("TERM=xterm-256color tmux -L mobile new-session -s mobile 'printf \"TOP_VISIBLE\\n\"; exec bash'\n")
-        try await Task.sleep(for: .seconds(2))
-        send("\u{02}:")
-        send("set-option status-left-length 30; set-option status-left STATUS_VISIBLE\n")
-        send("\u{02}\"")
-        try await Task.sleep(for: .seconds(1))
-        send("printf 'BOTTOM_VISIBLE\\n'\n")
+        send("TERM=xterm-256color tmux -L mobile new-session -s mobile 'printf \"TOP_%s\\n\" VISIBLE; exec bash'\n")
+        try await visible(["TOP_VISIBLE"], in: terminal, named: "tmux-attached")
+        try await tmuxCommand("set-option status-left-length 30; set-option status-left STATUS_VISIBLE", in: console)
+        try await visible(["STATUS_VISIBLE"], in: terminal, named: "tmux-status")
+        try await tmuxCommand("split-window -v 'printf \"BOTTOM_%s\\n\" VISIBLE; exec bash'", in: console)
         try await visible(["TOP_VISIBLE", "BOTTOM_VISIBLE", "STATUS_VISIBLE"], in: terminal, named: "tmux-portrait")
         terminal.frame = CGRect(x: 0, y: 0, width: 700, height: 260)
         window.frame = terminal.frame
@@ -109,6 +124,7 @@ struct DebianMobileTests {
         let columns = GuestTerminalGeometry.shared.columns
         try await visible(["TOP_VISIBLE", "BOTTOM_VISIBLE", "STATUS_VISIBLE"], in: terminal, named: "tmux-landscape-keyboard")
         send("\u{02}d")
+        try #require(try await eventually(within: .seconds(30)) { output.text.contains("[detached") })
         try await command("test \"$(stty size)\" = '\(rows) \(columns)' && printf 'GRID_%s_OK\\n' changed",
                           marker: "GRID_changed_OK", output: output)
         try await command("tmux -L mobile kill-server; printf 'MOBILE_%s_DONE\\n' checks; sudo poweroff",
