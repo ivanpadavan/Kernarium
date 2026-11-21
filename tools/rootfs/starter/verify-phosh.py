@@ -38,6 +38,16 @@ def main() -> None:
     shell = configparser.ConfigParser(interpolation=None)
     shell.read_string(read('/etc/systemd/user/mobi.phosh.Shell.service.d/keyboard.conf'))
     assert 'kernarium-squeekboard.service' in shell['Unit']['Wants'].split()
+    keyboard_enabled = guest('runuser', '-u', 'debian', '--', 'gsettings', 'get',
+                             'org.gnome.desktop.a11y.applications', 'screen-keyboard-enabled')
+    assert keyboard_enabled == 'true', 'The desktop must request its on-screen keyboard automatically'
+    terminal_id = 'org.gnome.Console.desktop'
+    favorites = guest('runuser', '-u', 'debian', '--', 'gsettings', 'get',
+                      'org.gnome.shell', 'favorite-apps')
+    assert terminal_id in favorites, 'The default terminal must be available in the Phosh favorites'
+    terminal = configparser.ConfigParser(interpolation=None, strict=False)
+    terminal.read_string(read('/usr/share/applications/' + terminal_id))
+    executable(shlex.split(terminal['Desktop Entry']['Exec'])[0])
     session = configparser.ConfigParser(interpolation=None)
     session.read_string(read('/usr/share/gnome-session/sessions/phosh.session'))
     components = session['GNOME Session']['RequiredComponents'].strip(';').split(';')
@@ -73,6 +83,7 @@ def main() -> None:
     assert 'gnome-session' in read('/usr/bin/phosh-session')
     report = {'required_components': entries, 'local_account': 'debian, unlocked, no initial password',
               'console_autologin': ['ttyS0', 'hvc0', 'tty1'], 'ssh': 'owner keys only',
+              'default_terminal': terminal_id, 'automatic_keyboard_requests': True,
               'boot_tests': 'pending'}
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
