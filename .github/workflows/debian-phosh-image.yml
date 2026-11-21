@@ -1,13 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 name: Debian IMG
-on:
-  push:
-    branches: [debian-phosh]
-  workflow_dispatch:
 permissions:
   contents: write
 concurrency:
-  group: debian-img-${{ github.ref }}
+  group: debian-img-${{ github.sha }}
   cancel-in-progress: false
 jobs:
   inputs:
@@ -19,152 +15,85 @@ jobs:
       phosh_key: ${{ steps.plan.outputs.phosh_key }}
       minimal_key: ${{ steps.plan.outputs.minimal_key }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: plan
-        env:
-          BEFORE: ${{ github.event.before }}
-        run: |
-          BEFORE=${BEFORE:-$(git rev-parse HEAD^)}
-          python3 -B tools/ci/debian-inputs.py --before "$BEFORE" --output plan.json --github-output "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: img-input-plan
-          path: plan.json
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - id: plan
+      env:
+        BEFORE: ${{ github.event.before }}
+      run: |
+        BEFORE=${BEFORE:-$(git rev-parse HEAD^)}
+        python3 -B tools/ci/debian-inputs.py --before "$BEFORE" --output plan.json --github-output "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: img-input-plan
+        path: plan.json
   base:
     needs: inputs
     if: needs.inputs.outputs.base == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache/restore@v4
-        id: base
-        with:
-          path: ${{ runner.temp }}/debian-base
-          key: debian-common-base-v1-${{ runner.arch }}-${{ needs.inputs.outputs.base_key }}
-      - name: Build shared Debian package base
-        if: steps.base.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends debootstrap e2fsprogs gdisk cpio zip
-          tools/rootfs/starter/build-all.sh --work "$RUNNER_TEMP/base-work" --output "$RUNNER_TEMP/debian-base" --product debian-base
-          python3 -B tools/ci/debian-artifacts.py record --root "$RUNNER_TEMP/debian-base" --kind debian-base --key '${{ needs.inputs.outputs.base_key }}'
-      - name: Verify common base contents and provenance
-        run: |
-          python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/debian-base" --kind debian-base --key '${{ needs.inputs.outputs.base_key }}'
-          python3 -B tools/rootfs/starter/verify-debian-base.py --archive "$RUNNER_TEMP/debian-base/debian-13-base.tar.gz"
-      - uses: actions/cache/save@v4
-        if: steps.base.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/debian-base
-          key: ${{ steps.base.outputs.cache-primary-key }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: debian-common-base
-          path: ${{ runner.temp }}/debian-base/
-          compression-level: 0
+    - uses: actions/checkout@v4
+    - uses: actions/cache/restore@v4
+      id: base
+      with:
+        path: ${{ runner.temp }}/debian-base
+        key: debian-common-base-v1-${{ runner.arch }}-${{ needs.inputs.outputs.base_key }}
+    - name: Build shared Debian package base
+      if: steps.base.outputs.cache-hit != 'true'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends debootstrap e2fsprogs gdisk cpio zip
+        tools/rootfs/starter/build-all.sh --work "$RUNNER_TEMP/base-work" --output "$RUNNER_TEMP/debian-base" --product debian-base
+        python3 -B tools/ci/debian-artifacts.py record --root "$RUNNER_TEMP/debian-base" --kind debian-base --key '${{ needs.inputs.outputs.base_key }}'
+    - name: Verify common base contents and provenance
+      run: |
+        python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/debian-base" --kind debian-base --key '${{ needs.inputs.outputs.base_key }}'
+        python3 -B tools/rootfs/starter/verify-debian-base.py --archive "$RUNNER_TEMP/debian-base/debian-13-base.tar.gz"
+    - uses: actions/cache/save@v4
+      if: steps.base.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.temp }}/debian-base
+        key: ${{ steps.base.outputs.cache-primary-key }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: debian-common-base
+        path: ${{ runner.temp }}/debian-base/
+        compression-level: 0
   image:
-    needs: [inputs, base]
+    needs:
+    - inputs
+    - base
     strategy:
       fail-fast: false
       matrix:
         kind: ${{ fromJSON(needs.inputs.outputs.images) }}
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
-    env:
-      PRODUCT: debian-13-${{ matrix.kind }}
-      INPUT_KEY: ${{ matrix.kind == 'phosh' && needs.inputs.outputs.phosh_key || needs.inputs.outputs.minimal_key }}
-      TAG: debian-13-${{ matrix.kind }}-${{ github.run_id }}-${{ github.run_attempt }}
-      GH_TOKEN: ${{ github.token }}
+    uses: ./.github/workflows/debian-image-product.yml
+    with:
+      kind: ${{ matrix.kind }}
+      input_key: ${{ matrix.kind == 'phosh' && needs.inputs.outputs.phosh_key || needs.inputs.outputs.minimal_key }}
+      base_key: ${{ needs.inputs.outputs.base_key }}
+'on':
+  push:
+    branches:
+    - debian-phosh
+  workflow_dispatch: null
+
+  timings:
+    if: always()
+    needs: [inputs, base, image]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: debian-common-base
-          path: ${{ runner.temp }}/debian-base
-      - uses: actions/cache/restore@v4
-        id: image
-        with:
-          path: ${{ runner.temp }}/image-release
-          key: debian-img-v2-${{ matrix.kind }}-${{ runner.arch }}-${{ env.INPUT_KEY }}
-      - name: Build only the selected product from the verified base
-        if: steps.image.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential cpio curl debootstrap e2fsprogs gdisk gzip python3 sudo tar zip unzip
-          python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/debian-base" --kind debian-base --key '${{ needs.inputs.outputs.base_key }}'
-          tools/rootfs/starter/build-all.sh --work "$RUNNER_TEMP/image-work" --output "$RUNNER_TEMP/image-release" --product "$PRODUCT" --debian-base "$RUNNER_TEMP/debian-base/debian-13-base.tar.gz"
-          python3 -B tools/rootfs/starter/gpt.py "$RUNNER_TEMP/image-release/$PRODUCT.img"
-          zip -9 -j "$RUNNER_TEMP/image-release/$PRODUCT.img.zip" "$RUNNER_TEMP/image-release/$PRODUCT.img"
-          unzip -t "$RUNNER_TEMP/image-release/$PRODUCT.img.zip"
-          rm "$RUNNER_TEMP/image-release/$PRODUCT.img"
-          python3 -B tools/ci/debian-artifacts.py record --root "$RUNNER_TEMP/image-release" --kind "debian-${{ matrix.kind }}" --key "$INPUT_KEY"
-      - name: Verify and make draft assets available before boot tests
-        run: |
-          python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/image-release" --kind "debian-${{ matrix.kind }}" --key "$INPUT_KEY"
-          gh release create "$TAG" --target "$GITHUB_SHA" --draft --title "$PRODUCT" --notes "Integrity checked. Guest boot qualification is running. Draft assets are available for testing."
-          gh release upload "$TAG" "$RUNNER_TEMP/image-release/"*
-      - uses: actions/cache/save@v4
-        if: steps.image.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/image-release
-          key: ${{ steps.image.outputs.cache-primary-key }}
+      - name: Report actual stage durations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/ci/debian-run-report.py
       - uses: actions/upload-artifact@v4
         with:
-          name: image-${{ matrix.kind }}
-          path: ${{ runner.temp }}/image-release/
-          compression-level: 0
-  boot:
-    needs: [inputs, image]
-    strategy:
-      fail-fast: false
-      matrix:
-        kind: ${{ fromJSON(needs.inputs.outputs.images) }}
-    runs-on: xcode-27
-    timeout-minutes: 60
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TAG: debian-13-${{ matrix.kind }}-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: image-${{ matrix.kind }}
-          path: ${{ runner.temp }}/image-release
-      - name: Fetch a qualified prebuilt image validator
-        run: |
-          XCODE_PATH=$(python3 -c 'import pathlib; p=sorted(pathlib.Path("/Applications").glob("Xcode_27*.app")); print(p[-1] if p else "/Applications/Xcode.app")')
-          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
-          mkdir -p .build/validator
-          gh release download debian-validation-host-44954236479 --dir .build/validator --pattern debian-validation-host.tar.gz --pattern qualification.json
-          echo 'a388c8b2fc3e12a257e289f8529b0a22a14b19f77d00dece66ccadb73a3e93cb  .build/validator/debian-validation-host.tar.gz' | shasum -a 256 -c -
-          tar -C .build/validator -xzf .build/validator/debian-validation-host.tar.gz
-          python3 -B tools/ci/debian-artifacts.py verify --root .build/validator/Products --kind validation-host --key b185c4198dfbf5d13cf7142d2e7bfacfd565a4e3
-          python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/image-release" --kind 'debian-${{ matrix.kind }}'
-          unzip -q "$RUNNER_TEMP/image-release/debian-13-${{ matrix.kind }}.img.zip" -d "$RUNNER_TEMP"
-      - name: Real guest boots, clipboard, TTY and persistence
-        run: |
-          python3 -B tools/ci/run-debian-simulator.py --products .build/validator/Products --image "$RUNNER_TEMP/debian-13-${{ matrix.kind }}.img" --kind '${{ matrix.kind }}' --features --output "$RUNNER_TEMP/boot-results"
-      - name: Publish only a completely qualified image
-        run: |
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          root = Path(os.environ['RUNNER_TEMP'])
-          qualification = dict(kind='debian-${{ matrix.kind }}', source_revision=os.environ['GITHUB_SHA'],
-            input_key='${{ matrix.kind == 'phosh' && needs.inputs.outputs.phosh_key || needs.inputs.outputs.minimal_key }}',
-            run_id=os.environ['GITHUB_RUN_ID'], tests={phase: json.loads((root / 'boot-results' / (phase + '-summary.json')).read_text()) for phase in ('write', 'read')})
-          (root / 'qualification.json').write_text(json.dumps(qualification, indent=2) + '\n')
-          PY
-          gh release upload "$TAG" "$RUNNER_TEMP/qualification.json"
-          gh release edit "$TAG" --draft=false --prerelease --notes "Real Simulator guest boot, local login, TTY sizing, write/read persistence and clean shutdown passed. Phosh additionally checks GUI frames, clipboard UTF-8 roundtrip and automatic Squeekboard startup. Physical iPhone gesture checks remain separate."
-      - name: Preserve failures and actual test counts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: img-boot-${{ matrix.kind }}
-          path: |
-            ${{ runner.temp }}/boot-results/
-          if-no-files-found: warn
+          name: img-stage-times
+          path: debian-stage-times.json

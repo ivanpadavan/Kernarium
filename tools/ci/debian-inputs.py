@@ -42,7 +42,7 @@ GROUPS = {
                'tools/ci/apple-product-key.py', 'tools/ci/debian-artifacts.py',
                'tools/ci/stage-debian-runtime.py', 'tools/ci/qualified-debian-image.py',
                'tools/ci/run-debian-simulator.py', 'tools/ci/debian-inputs.py'],
-    'image-ci': ['.github/workflows/debian-phosh-image.yml',
+    'image-ci': ['.github/workflows/debian-phosh-image.yml', '.github/workflows/debian-image-product.yml',
                  'tools/ci/debian-artifacts.py', 'tools/ci/debian-image.sh',
                  'tools/ci/debian-inputs.py'],
 }
