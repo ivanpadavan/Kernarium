@@ -63,8 +63,14 @@ struct PersistentDebianTests {
         // Splitting the marker prevents terminal echo of the command from
         // satisfying the assertion. A failed check leaves the shell available
         // for a retry while the desktop is still coming up.
+        let sessionDiagnostics = writing
+            ? "sudo journalctl -b _UID=1000 -n 250 --no-pager; " +
+              "systemctl --user --no-pager status sm.puri.OSK0.service; " +
+              "ps -eo pid,comm,args; "
+            : ""
         let command = "if " + login + check + "; then sync && " +
-            "printf 'DEBIAN_%s_OK\\n' smoke; sudo systemctl poweroff; fi\n"
+            "printf 'DEBIAN_%s_OK\\n' smoke; " + sessionDiagnostics +
+            "sudo systemctl poweroff; fi\n"
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(900))
         var nextInput = clock.now
