@@ -126,6 +126,14 @@ jobs:
         run: |
           rm -f .build/test-host/Products/selected.xctestrun
           python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite PersistentDebianTests --output "$RUNNER_TEMP/persistent-results"
+      - name: Check tmux panes and status from rendered screen pixels
+        run: |
+          rm -f .build/test-host/Products/selected.xctestrun
+          python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianMobileTests --single-phase --output "$RUNNER_TEMP/mobile-results"
+      - name: Increase the disk before boot and check ext4 and data across two reboots
+        run: |
+          rm -f .build/test-host/Products/selected.xctestrun
+          python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianStorageTests --storage --output "$RUNNER_TEMP/storage-results"
       - name: Publish only after all required app checks pass
         run: |
           gh release upload "$TAG" "$RUNNER_TEMP/golden-image/qualification.json"
@@ -137,4 +145,6 @@ jobs:
           path: |
             ${{ runner.temp }}/app-results/
             ${{ runner.temp }}/persistent-results/
+            ${{ runner.temp }}/mobile-results/
+            ${{ runner.temp }}/storage-results/
           if-no-files-found: warn

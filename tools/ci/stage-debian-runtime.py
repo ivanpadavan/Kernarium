@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import shlex
 import subprocess
 
 spec = importlib.util.spec_from_file_location('debian_inputs', Path(__file__).with_name('debian-inputs.py'))
@@ -46,7 +47,9 @@ def main():
         '--kernel-metadata', 'kernel/mainline-6.18/patches/metadata.env')
     descriptor = Path('tools/rootfs/boot-ramdisk/accepted-aarch64.env')
     descriptor.write_bytes((download / descriptor.name).read_bytes())
-    values = dict(line.split('=', 1) for line in descriptor.read_text().splitlines() if line and not line.startswith('#'))
+    values = {key: shlex.split(value)[0]
+              for key, value in (line.split('=', 1) for line in descriptor.read_text().splitlines()
+                                 if line and not line.startswith('#'))}
     archive = Path('.build/rootfs') / values['UML_BOOT_BASE_RELEASE'] / 'uml-boot-base-aarch64.cpio.gz'
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.write_bytes((download / archive.name).read_bytes())
