@@ -237,11 +237,12 @@ jobs:
         TEST_RUNNER_KERNARIUM_DEBIAN_SMOKE: write
         TEST_RUNNER_KERNARIUM_LINUX_CONSOLE_BOOT: '0'
       run: |
+        set -o pipefail
         xcodebuild test-without-building -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
           -configuration Release -destination "id=$SIM_UDID" -derivedDataPath "$PWD/.build/simulator-derived" \
           -only-testing:KernariumTests/PersistentDebianTests -parallel-testing-enabled NO \
           -resultBundlePath "$RUNNER_TEMP/write.xcresult" \
-          CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64
+          CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64 2>&1 | tee "$RUNNER_TEMP/write-boot.log"
         xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/write.xcresult" > "$RUNNER_TEMP/write-summary.json"
         python3 - <<'PYTHON'
         import json, os
@@ -257,11 +258,12 @@ jobs:
         TEST_RUNNER_KERNARIUM_DEBIAN_SMOKE: read
         TEST_RUNNER_KERNARIUM_LINUX_CONSOLE_BOOT: '1'
       run: |
+        set -o pipefail
         xcodebuild test-without-building -project Kernarium/Kernarium.xcodeproj -scheme Kernarium \
           -configuration Release -destination "id=$SIM_UDID" -derivedDataPath "$PWD/.build/simulator-derived" \
           -only-testing:KernariumTests/PersistentDebianTests -parallel-testing-enabled NO \
           -resultBundlePath "$RUNNER_TEMP/read.xcresult" \
-          CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64
+          CODE_SIGNING_ALLOWED=NO EXCLUDED_ARCHS=x86_64 2>&1 | tee "$RUNNER_TEMP/read-boot.log"
         xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/read.xcresult" > "$RUNNER_TEMP/read-summary.json"
         python3 - <<'PYTHON'
         import json, os
@@ -286,6 +288,7 @@ jobs:
         path: |
           ${{ runner.temp }}/*.xcresult
           ${{ runner.temp }}/*-summary.json
+          ${{ runner.temp }}/*-boot.log
         if-no-files-found: ignore
     - name: Shut down test Simulator
       if: always() && env.SIM_UDID != ''
