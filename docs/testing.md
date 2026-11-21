@@ -6,6 +6,11 @@ the changed behavior. `cmake --list-presets=all` lists the preset surface.
 
 ## Test suites
 
+`macos-arm64-unit` configures native ARM64 unit tests without x86 dependencies.
+The `jit-memory-test-binaries` build preset and `jit-memory` test preset check
+the executable-memory owner, including an already enabled process and the
+servicing-debugger route.
+
 Every first-party CTest has exactly one primary suite, set by the registering
 helper in `cmake/UmlTesting.cmake`; `ctest -N -L <suite>` lists a tree's
 registrations:

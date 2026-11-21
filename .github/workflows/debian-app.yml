@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       app: ${{ steps.plan.outputs.app }}
+      runtime_tests: ${{ steps.plan.outputs.runtime_tests }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -188,6 +189,7 @@ jobs:
     - inputs
     - build
     - tests
+    - jit-memory
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -202,6 +204,37 @@ jobs:
       with:
         name: ipa-stage-times
         path: debian-stage-times.json
+  jit-memory:
+    needs: inputs
+    if: needs.inputs.outputs.runtime_tests == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build and check the executable-memory owner
+      run: |
+        test "$(uname -m)" = arm64
+        brew install cmake ninja
+        cmake --preset macos-arm64-unit
+        cmake --build --preset jit-memory-test-binaries --parallel 3
+        ctest --preset jit-memory --output-junit "$RUNNER_TEMP/jit-memory.xml"
+        python3 - <<'PYTHON'
+        import os, xml.etree.ElementTree as ET
+        from pathlib import Path
+        root=ET.parse(Path(os.environ['RUNNER_TEMP'])/'jit-memory.xml').getroot()
+        tests=root.findall('.//testcase')
+        selected={t.attrib['name'] for t in tests if t.attrib['name'].startswith('arm64-jit-')}
+        expected={'arm64-jit-debugger-region','arm64-jit-debugger-request','arm64-jit-enabled-process','arm64-jit-memory-preparation'}
+        assert selected==expected,selected
+        assert all(t.find('failure') is None and t.find('skipped') is None for t in tests)
+        print('ACTUAL_JIT_MEMORY_TESTS:',len(selected),'passed; zero failed or skipped')
+        PYTHON
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: jit-memory-native-results
+        path: ${{ runner.temp }}/jit-memory.xml
+        if-no-files-found: warn
 'on':
   push:
     branches:

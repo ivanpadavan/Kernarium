@@ -333,8 +333,8 @@ enum {
     /* This runtime has no JIT: a build for the Simulator or a host that cannot
      * make executable memory. */
     KERNARIUM_RUNTIME_JIT_UNSUPPORTED = 1,
-    /* No debugger is attached to the process, or the one that was left
-     * before it served the request, so none prepared the memory. A boot
+    /* Existing process JIT permission is absent and no debugger prepared
+     * the memory, including one that left before serving the request. A boot
      * runs on gadgets. */
     KERNARIUM_RUNTIME_JIT_NO_DEBUGGER = 2,
     /* The memory could not be prepared: the debugger did not answer, or the
@@ -352,8 +352,9 @@ enum {
 /* Prepares the JIT for a guest of `guest_memory_mib` and `guest_processor_count`
  * vCPUs when `enable` is nonzero (runtime API 30), and returns a
  * KERNARIUM_RUNTIME_JIT_ value. On an iOS device the JIT's executable memory
- * comes from a region a debugger the user attached to the process blesses once
- * per process; the debugger then detaches. A zero `enable` only tells an
+ * comes from a region verified using existing process JIT permission or
+ * prepared by a debugger the user attached; that debugger then detaches.
+ * A zero `enable` only tells an
  * attached debugger to detach, so a process that will not use the JIT does
  * not stay under it. Call it before run, with the memory and vCPUs the run
  * will state, and away from the main thread: it blocks for the seconds the

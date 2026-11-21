@@ -267,6 +267,9 @@ get_property(_uml_static_mmu GLOBAL PROPERTY UML_STATIC_MMU_TARGET)
     uml_add_arm64_unit_test(jit_debugger_request NAME arm64-jit-debugger-request
         WITHOUT_HARNESS
         OBJECTS $<TARGET_OBJECTS:uml_cpu_executable_memory_region_test>)
+    uml_add_arm64_unit_test(jit_enabled_process NAME arm64-jit-enabled-process
+        WITHOUT_HARNESS
+        OBJECTS $<TARGET_OBJECTS:uml_cpu_executable_memory_region_test>)
     # The size of that region from the JIT cache's geometry, and the
     # preparation seam on a host without the route.
     uml_add_arm64_unit_test(jit_memory_preparation

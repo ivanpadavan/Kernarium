@@ -358,9 +358,10 @@ JIT memory from a window near the host image, because generated code calls into
 it and a far buffer made x87-heavy FEXCore code about a third slower; memory
 served again may hold its old bytes.
 
-An iOS device has no `MAP_JIT` for a process that no debugger launched, so the
-owner makes executable memory there from one region that a debugger the user
-attached blesses once per process (`prepare_debugger_region`). The owner maps
+On an iOS device the owner makes executable memory from one region per process
+(`prepare_debugger_region`). Existing JIT permission is used after every
+granule passes an execution probe; otherwise a debugger the user attached
+blesses the region. The owner maps
 the region read-execute below 1 TiB near the image, makes a writable alias of
 it, and executes `brk #0xf00d` with `x16` 1, `x0` the address and `x1` the
 length; the debugger writes one byte into each 16 KiB page of it, and a second

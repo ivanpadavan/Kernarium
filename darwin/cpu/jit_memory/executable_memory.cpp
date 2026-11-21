@@ -285,6 +285,7 @@ constexpr std::uint32_t request_word = 0xd43e01a0U;
 /* What the host test steers; see executable_memory_testing.hpp. */
 std::atomic<bool> test_sends_requests{false};
 std::atomic<bool (*)() noexcept> test_traced_probe{nullptr};
+std::atomic<std::uint32_t> test_code_signing_flags{};
 #endif
 
 /* How a request to the debugger came back. */
@@ -457,18 +458,33 @@ struct Answer final {
 }
 
 /* The process may run a bad page into SIGBUS and not into SIGKILL. */
-[[nodiscard]] bool kill_cleared() noexcept
+[[nodiscard]] std::uint32_t code_signing_flags() noexcept
 {
 #if UML_JIT_MEMORY_REGION_TEST
-	return true;
+	return test_code_signing_flags.load();
 #else
 	constexpr unsigned status_operation = 0;
-	constexpr std::uint32_t kill_flag = 0x00000200U;
 	std::uint32_t flags = 0;
 	if (csops(getpid(), status_operation, &flags, sizeof flags) != 0)
-		return false;
-	return (flags & kill_flag) == 0;
+		return 0x00000200U;
+	return flags;
 #endif
+}
+
+[[nodiscard]] bool kill_cleared() noexcept
+{
+	constexpr std::uint32_t kill_flag = 0x00000200U;
+	return (code_signing_flags() & kill_flag) == 0;
+}
+
+[[nodiscard]] bool process_jit_enabled() noexcept
+{
+	/* XNU's CS_DEBUGGED also remains set after a JIT enabler detaches.
+	 * Requiring CS_KILL clear makes the executable-page probe recoverable. */
+	constexpr std::uint32_t debugged_flag = 0x10000000U;
+	constexpr std::uint32_t kill_flag = 0x00000200U;
+	return (code_signing_flags() & (debugged_flag | kill_flag)) ==
+		debugged_flag;
 }
 
 sigjmp_buf fault_jump;
@@ -538,7 +554,8 @@ public:
 						      : RegionStatus::smaller;
 		if (spent_)
 			return RegionStatus::failed;
-		if (!traced())
+		const bool needs_debugger = traced();
+		if (!needs_debugger && !process_jit_enabled())
 			return RegionStatus::no_debugger;
 		const auto size = granules * region_granule;
 		std::byte *executable = nullptr;
@@ -547,8 +564,9 @@ public:
 			note("the region could not be mapped");
 			return RegionStatus::failed;
 		}
-		const auto prepared = ask_debugger(
-			1, reinterpret_cast<std::uintptr_t>(executable), size);
+		const auto prepared = needs_debugger ? ask_debugger(
+			1, reinterpret_cast<std::uintptr_t>(executable), size) :
+			Reply::answered;
 		if (prepared == Reply::no_debugger) {
 			/* The debugger was gone before it served the request, so
 			 * nothing can still write into the region, and this process
@@ -557,8 +575,8 @@ public:
 			give_back(executable, writable, size);
 			return RegionStatus::no_debugger;
 		}
-		/* From a request the debugger is involved: whatever happens, this
-		 * process does not try again. */
+		/* A debugger request or a direct executable-page probe makes this a
+		 * single preparation attempt for the process. */
 		spent_ = true;
 		if (prepared != Reply::answered) {
 			/* A debugger that answers late still writes into the
@@ -570,7 +588,8 @@ public:
 		 * debugger that does not answer this either is left as it is; one
 		 * that is gone has detached, and the pages it blessed before it
 		 * went are proved below. */
-		const auto detached = ask_debugger(0, 0, 0);
+		const auto detached = needs_debugger ? ask_debugger(0, 0, 0) :
+			Reply::answered;
 		if (detached != Reply::answered && detached != Reply::no_debugger) {
 			note("the debugger did not detach");
 			return RegionStatus::failed;
@@ -585,7 +604,7 @@ public:
 			give_back(executable, writable, size);
 			return RegionStatus::failed;
 		}
-		if (!check(executable, writable, size)) {
+		if (!check(executable, writable, size, !needs_debugger)) {
 			note("the prepared pages did not run code");
 			give_back(executable, writable, size);
 			return RegionStatus::failed;
@@ -594,6 +613,9 @@ public:
 		delta_ = writable - executable;
 		granules_ = granules;
 		ready_.store(true, std::memory_order_release);
+		if (!needs_debugger)
+			std::fputs("Kernarium: JIT memory: using the process's "
+				"existing JIT permission\n", stderr);
 		return RegionStatus::ready;
 	}
 
@@ -701,14 +723,15 @@ private:
 		return true;
 	}
 
-	/* Writes `mov w0, #value; ret` through the alias at the first and the last
-	 * granule and runs both through the executable mapping. */
+	/* A debugger blesses every granule. Without a live debugger, prove every
+	 * granule's executable permission before any guest code can use it. */
 	[[nodiscard]] static bool check(std::byte *executable,
-		std::byte *writable, std::size_t size) noexcept
+		std::byte *writable, std::size_t size, bool every_page) noexcept
 	{
-		const std::array<std::size_t, 2> offsets{0, size - region_granule};
+		const auto step = every_page || size == region_granule ?
+			region_granule : size - region_granule;
 		std::uint32_t value = 0x5a5a;
-		for (const auto offset : offsets) {
+		for (std::size_t offset = 0; offset < size; offset += step) {
 			auto *words = reinterpret_cast<std::uint32_t *>(
 				writable + offset);
 			words[0] = 0x52800000U | (value << 5U);
@@ -716,7 +739,7 @@ private:
 			sys_icache_invalidate(executable + offset, 8);
 			if (!runs(executable + offset, value))
 				return false;
-			++value;
+			value = (value + 1) & 0xffffU;
 		}
 		return true;
 	}
@@ -758,6 +781,11 @@ void send_real_requests(bool send) noexcept
 void set_traced_probe(bool (*probe)() noexcept) noexcept
 {
 	test_traced_probe.store(probe);
+}
+
+void set_code_signing_flags(std::uint32_t flags) noexcept
+{
+	test_code_signing_flags.store(flags);
 }
 
 int request(std::uint64_t command) noexcept

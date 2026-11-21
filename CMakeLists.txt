@@ -63,6 +63,8 @@ option(UML_BUILD_KERNEL_RUNNER
 option(UML_BUILD_UNIT_TESTS
     "Build host-only C++/assembly unit tests"
     ${UML_TARGET_MACOS})
+option(UML_BUILD_X86_64_UNIT_TESTS
+    "Include x86-64 CPU products in a native unit-test configuration" ON)
 option(UML_BUILD_INTEGRATION_TESTS
     "Register guest, rootfs, Python, VNC, and workload integration tests" OFF)
 set(_uml_build_tooling_tests_default OFF)
@@ -135,7 +137,8 @@ endif()
 set(UML_GUEST_PAGE_SIZE 4096)
 set(UML_GUEST_PAGE_SHIFT 12)
 if(UML_TARGET_MACOS AND
-   (UML_MAINLINE_KERNEL_SLICE STREQUAL "x86_64" OR UML_BUILD_UNIT_TESTS))
+   (UML_MAINLINE_KERNEL_SLICE STREQUAL "x86_64" OR
+    (UML_BUILD_UNIT_TESTS AND UML_BUILD_X86_64_UNIT_TESTS)))
     set(UML_BUILD_X86_64_GUEST ON)
 else()
     set(UML_BUILD_X86_64_GUEST OFF)

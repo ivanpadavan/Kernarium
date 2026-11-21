@@ -58,7 +58,8 @@ one. The defaults for a new launch are in
 The JIT setting asks the runtime to prepare executable memory before boot,
 using the run's guest memory and vCPU count. A ready result selects the JIT;
 an unavailable or failed preparation selects gadgets and reports the reason in
-Settings. Device preparation uses the existing servicing-debugger protocol;
+Settings. Device preparation uses existing process JIT permission or the
+servicing-debugger protocol;
 the Simulator reports that this JIT route is unavailable.
 
 ## Memory

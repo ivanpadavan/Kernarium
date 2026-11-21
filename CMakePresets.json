@@ -242,6 +242,15 @@
       "cacheVariables": {
         "UML_KERNARIUM_AUTOMATION_HARNESS": true
       }
+    },
+    {
+      "name": "macos-arm64-unit",
+      "displayName": "ARM64 native unit tests without x86 dependencies",
+      "inherits": "macos-unit",
+      "cacheVariables": {
+        "UML_BUILD_X86_64_UNIT_TESTS": false,
+        "UML_BUILD_X86_64_JIT": false
+      }
     }
   ],
   "buildPresets": [
@@ -354,6 +363,16 @@
       "name": "kernarium-ios-simulator-android-automation",
       "configurePreset": "kernarium-ios-simulator-android-automation",
       "targets": ["KernariumRuntime", "architecture-audit"]
+    },
+    {
+      "name": "jit-memory-test-binaries",
+      "configurePreset": "macos-arm64-unit",
+      "targets": [
+        "uml_arm64_jit_debugger_region_tests",
+        "uml_arm64_jit_debugger_request_tests",
+        "uml_arm64_jit_enabled_process_tests",
+        "uml_arm64_jit_memory_preparation_tests"
+      ]
     }
   ],
   "testPresets": [
@@ -544,6 +563,16 @@
       },
       "execution": {
         "jobs": 1
+      }
+    },
+    {
+      "name": "jit-memory",
+      "inherits": "test-defaults",
+      "configurePreset": "macos-arm64-unit",
+      "filter": {
+        "include": {
+          "name": "^arm64-jit-(debugger-region|debugger-request|enabled-process|memory-preparation)$"
+        }
       }
     }
   ],
