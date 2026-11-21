@@ -6,7 +6,7 @@ import Foundation
 /// authorizes selecting that engine for the boot's memory and vCPU count.
 nonisolated struct GuestJITChoice: Equatable, Sendable {
     let enabled: Bool
-    let answer: Int32
+    let answer: Int
 
     var usesJIT: Bool { enabled && answer == KERNARIUM_RUNTIME_JIT_READY }
 
@@ -39,6 +39,6 @@ nonisolated struct GuestJITChoice: Equatable, Sendable {
         }
         #endif
         let answer = kernarium_runtime_loader_prepare_jit(enabled ? 1 : 0, memoryMiB, vCPUs)
-        return Self(enabled: enabled, answer: answer)
+        return Self(enabled: enabled, answer: Int(answer))
     }
 }
