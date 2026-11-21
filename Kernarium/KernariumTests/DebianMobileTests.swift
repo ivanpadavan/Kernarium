@@ -162,7 +162,8 @@ struct DebianMobileTests {
                 let request = VNRecognizeTextRequest()
                 request.recognitionLevel = .accurate
                 request.usesLanguageCorrection = false
-                try VNImageRequestHandler(cgImage: frame).perform([request])
+                do { try VNImageRequestHandler(cgImage: frame).perform([request]) }
+                catch { text = error.localizedDescription; return false }
                 text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
                 return text.contains(marker)
             }
