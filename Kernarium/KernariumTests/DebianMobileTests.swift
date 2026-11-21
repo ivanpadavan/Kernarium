@@ -1,11 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import Foundation
+import CoreImage
+import CoreVideo
 import GhosttyTerminal
 import Testing
 import UIKit
 import Vision
 @testable import Kernarium
+
+private let mobileFrameSink: kernarium_runtime_frame_sink = { context, buffer in
+    guard let context, let buffer else { return }
+    let relay = Unmanaged<FrameRelay>.fromOpaque(context).takeUnretainedValue()
+    relay.receive(Unmanaged<CVPixelBuffer>.fromOpaque(buffer).takeUnretainedValue())
+}
 
 /// Integration assertions inspect rendered terminal pixels as well as the
 /// guest's TTY. These are separate from native finger-gesture UI checks.
@@ -101,6 +109,7 @@ struct DebianMobileTests {
         }
         try #require(output.text.contains("MOBILE_guest_READY"))
         try await clipboard(output)
+        try await graphicalTerminal(output)
         try #require(try await eventually(within: .seconds(120)) { GuestTerminalGeometry.shared.error == nil && GuestTerminalGeometry.shared.rows > 0 })
         let firstRows = GuestTerminalGeometry.shared.rows
         let firstColumns = GuestTerminalGeometry.shared.columns
@@ -133,6 +142,71 @@ struct DebianMobileTests {
             if case .ended(result: 0) = EmulatorLauncher.shared.phase { return output.text.contains("reboot: Power down") }
             return false
         })
+    }
+
+    private func graphicalTerminal(_ output: Output) async throws {
+        let relay = FrameRelay()
+        let context = CIContext()
+        var frame: CGImage?
+        relay.handler = { buffer in
+            let image = CIImage(cvPixelBuffer: buffer)
+            frame = context.createCGImage(image, from: image.extent)
+        }
+        try #require(kernarium_runtime_loader_set_frame_sink(mobileFrameSink,
+            Unmanaged.passUnretained(relay).toOpaque(), 1280, 5) == 0)
+        defer { _ = kernarium_runtime_loader_set_frame_sink(nil, nil, 0, 0) }
+        func screen(_ marker: String, named name: String) async throws {
+            var text = ""
+            let found = try await eventually(within: .seconds(60), every: .milliseconds(500)) {
+                guard let frame else { return false }
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = false
+                try VNImageRequestHandler(cgImage: frame).perform([request])
+                text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+                return text.contains(marker)
+            }
+            if let frame, let png = UIImage(cgImage: frame).pngData() { Attachment.record(png, named: name + ".png") }
+            try #require(found, "Graphical terminal did not display \(marker): \(text)")
+        }
+        func key(_ code: UInt16, modifiers: [UInt16] = []) {
+            for modifier in modifiers { kernarium_runtime_loader_send_key(modifier, 1) }
+            kernarium_runtime_loader_send_key(code, 1)
+            kernarium_runtime_loader_send_key(code, 0)
+            for modifier in modifiers.reversed() { kernarium_runtime_loader_send_key(modifier, 0) }
+        }
+        func paste(_ text: String) async throws {
+            let reply = try await GuestSession.request(GuestSessionRequest(operation: "clipboard-write", text: text))
+            try #require(reply.ok)
+            key(47, modifiers: [29, 42]) // Ctrl+Shift+V
+        }
+        try await command("(XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus " +
+                          "WAYLAND_DISPLAY=$(find /run/user/1000 -maxdepth 1 -type s -name 'wayland-*' -printf '%f\\n' | head -n 1) " +
+                          "kgx -- env PS1=GRAPHIC_READY_PROMPT /bin/bash --noprofile --norc >/tmp/kernarium-kgx.log 2>&1 &); " +
+                          "printf 'GRAPHIC_%s_STARTED\\n' terminal", marker: "GRAPHIC_terminal_STARTED", output: output)
+        try await screen("GRAPHIC_READY_PROMPT", named: "graphical-console-ready")
+        try await paste("printf 'GUI_KEY_TYPED\\n' > /home/debian/.graphical-keys")
+        try await command("test ! -e /home/debian/.graphical-keys && printf 'GRAPHIC_%s_OK\\n' notexecuted",
+                          marker: "GRAPHIC_notexecuted_OK", output: output)
+        key(28)
+        try await command("test \"$(cat /home/debian/.graphical-keys)\" = GUI_KEY_TYPED && printf 'GRAPHIC_%s_OK\\n' pasted",
+                          marker: "GRAPHIC_pasted_OK", output: output)
+        try await paste("tmux -L graphical new-session -s graphical 'printf \"GRAPHIC_%s_READY\\n\" TMUX; exec bash'")
+        key(28)
+        try await screen("GRAPHIC_TMUX_READY", named: "graphical-tmux-ready")
+        key(48, modifiers: [29]) // Ctrl+B
+        key(46) // c: a new tmux window
+        try #require(try await eventually(within: .seconds(30), every: .seconds(1)) {
+            send("test \"$(tmux -L graphical list-windows -F '#{window_index}' | wc -l)\" -eq 2 && printf 'GRAPHIC_%s_OK\\n' prefix\n")
+            return output.text.contains("GRAPHIC_prefix_OK")
+        })
+        try await paste("printf 'GRAPHIC_PREFIX_OK\\n'")
+        key(28)
+        try await screen("GRAPHIC_PREFIX_OK", named: "graphical-tmux-prefix")
+        send("tmux -L graphical kill-server; cat /tmp/kernarium-kgx.log; " +
+             "gdbus call --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 " +
+             "--method org.freedesktop.DBus.Properties.Get sm.puri.OSK0 Visible\n")
+        print("MOBILE_PROOF: real GNOME Console accepted Ctrl+Shift+V without execution before Enter; Ctrl+B created a second tmux window and its output was visible")
     }
 
     private func clipboard(_ output: Output) async throws {
