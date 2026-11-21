@@ -7,7 +7,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: debian-ipa-${{ github.ref }}
+  group: debian-ipa-${{ github.sha }}
   cancel-in-progress: false
 jobs:
   inputs:
@@ -148,3 +148,21 @@ jobs:
             ${{ runner.temp }}/mobile-results/
             ${{ runner.temp }}/storage-results/
           if-no-files-found: warn
+
+  timings:
+    if: always()
+    needs: [inputs, build, tests]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Report actual stage durations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/ci/debian-run-report.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipa-stage-times
+          path: debian-stage-times.json

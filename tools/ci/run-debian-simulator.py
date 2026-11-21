@@ -19,7 +19,7 @@ def capture(*command):
     return subprocess.check_output(command, text=True, timeout=60).strip()
 
 
-def create_simulator():
+def create_simulator(family):
     def listing(kind):
         return json.loads(capture('xcrun', 'simctl', 'list', kind, '--json'))[kind]
     deadline = time.monotonic() + 180
@@ -31,7 +31,7 @@ def create_simulator():
         parts = list(map(int, runtime['version'].split('.'))) + [0, 0]
         version = parts[0] << 16 | parts[1] << 8 | parts[2]
         for model in models:
-            if not model['name'].startswith(('iPhone', 'iPad')):
+            if not model['name'].startswith(family):
                 continue
             if allowed is not None and model['identifier'] not in allowed:
                 continue
@@ -68,17 +68,19 @@ def main():
     parser.add_argument('--features', action='store_true')
     parser.add_argument('--storage', action='store_true')
     parser.add_argument('--single-phase', action='store_true')
+    parser.add_argument('--family', choices=['iPad', 'iPhone'], default='iPad')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     products = args.products.resolve()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    udid = create_simulator()
+    udid = create_simulator(args.family)
+    container = None
     try:
         run('xcrun', 'simctl', 'boot', udid)
         run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
         app = products / 'Release-iphonesimulator/Kernarium.app'
-        run('xcrun', 'simctl', 'install', udid, str(app))
+        run('xcrun', 'simctl', 'install', udid, str(app), timeout=300)
         container = Path(capture('xcrun', 'simctl', 'get_app_container', udid, 'com.imxieyi.Kernarium', 'data'))
         documents = container / 'Documents'
         documents.mkdir(exist_ok=True)
@@ -144,13 +146,22 @@ def main():
                 assert after.st_blocks * 512 < after.st_size, 'Growth must preserve a sparse image'
                 print('STORAGE_HOST_PROOF:', before.st_size, '->', after.st_size,
                       'allocated bytes:', after.st_blocks * 512, flush=True)
+    except BaseException as error:
+        (output / 'runner-error.txt').write_text(repr(error) + '\n')
+        raise
     finally:
         try:
-            container = Path(capture('xcrun', 'simctl', 'get_app_container', udid, 'com.imxieyi.Kernarium', 'data'))
-            log = container / 'Library/Caches/debian-boot.log'
-            if log.exists():
-                shutil.copyfile(log, output / 'application-boot.log')
+            if container is not None:
+                log = container / 'Library/Caches/debian-boot.log'
+                if log.exists():
+                    shutil.copyfile(log, output / 'application-boot.log')
+            with (output / 'simulator-host.log').open('w') as log:
+                subprocess.run(['log', 'show', '--last', '10m', '--style', 'compact', '--predicate',
+                                'subsystem CONTAINS "CoreSimulator" OR process == "installd"'],
+                               stdout=log, stderr=subprocess.STDOUT, timeout=45)
             subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', str(output / 'screen.png')], timeout=30)
+        except (OSError, subprocess.SubprocessError) as error:
+            print('Diagnostic collection:', error, flush=True)
         finally:
             subprocess.run(['xcrun', 'simctl', 'shutdown', udid], timeout=60)
             subprocess.run(['xcrun', 'simctl', 'delete', udid], timeout=60)

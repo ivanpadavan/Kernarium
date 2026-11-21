@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Debian IPA and IMG compatibility
+on:
+  workflow_dispatch:
+    inputs:
+      app_release:
+        description: Existing IPA release tag, including drafts with a matching Simulator host
+        required: true
+        type: string
+      image_release:
+        description: Existing Phosh IMG release tag, including integrity-checked drafts
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  compatibility:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      APP_TAG: ${{ inputs.app_release }}
+      IMAGE_TAG: ${{ inputs.image_release }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: |
+          XCODE_PATH=$(python3 -c 'import pathlib; p=sorted(pathlib.Path("/Applications").glob("Xcode_27*.app")); print(p[-1] if p else "/Applications/Xcode.app")')
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+      - name: Fetch and verify the chosen existing products
+        run: |
+          python3 -B tools/ci/fetch-debian-app.py --tag "$APP_TAG" --output "$RUNNER_TEMP/app"
+          python3 -B tools/ci/qualified-debian-image.py --tag "$IMAGE_TAG" --test-draft --output "$RUNNER_TEMP/image"
+      - name: Real boot and persistence with the selected app build and disk
+        run: |
+          python3 -B tools/ci/run-debian-simulator.py --products "$RUNNER_TEMP/app/Products" --image "$RUNNER_TEMP/image/debian-13-phosh.img" --suite PersistentDebianTests --output "$RUNNER_TEMP/pair-results"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chosen-product-compatibility
+          path: ${{ runner.temp }}/pair-results/
+          if-no-files-found: warn
