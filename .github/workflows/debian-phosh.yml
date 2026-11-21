@@ -176,6 +176,11 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Install documented Python GPU build tools
+        run: |
+          python3 -m venv .build/gpu-tools-venv
+          .build/gpu-tools-venv/bin/python -m pip install meson Mako PyYAML packaging
+          echo "$PWD/.build/gpu-tools-venv/bin" >> "$GITHUB_PATH"
       - name: Download validated CI inputs
         env:
           GH_TOKEN: ${{ github.token }}
