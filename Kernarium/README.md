@@ -601,11 +601,11 @@ Debian application and image validation have independent entry points:
 [`Debian IPA`](../.github/workflows/debian-app.yml) consumes an already
 boot-qualified image, while [`Debian IMG`](../.github/workflows/debian-phosh-image.yml)
 uses a qualified prebuilt validation host. Source-input identities select the
-affected products and verify cached artifacts. Each product uploads checked
-draft assets before its longer tests and publishes only after its own required
-checks pass. The manual
+affected products and verify cached artifacts. Each product saves checked
+Actions artifacts before its longer tests and records qualification only after
+its own required checks pass. The manual
 [`compatibility workflow`](../.github/workflows/debian-compatibility.yml)
-tests chosen existing releases without rebuilding either product, using the
+tests chosen existing artifacts without rebuilding either product, using the
 IPA's matching Simulator host. Device runtime and finger-gesture validation on
 an iPhone remains separate from Simulator results.
 

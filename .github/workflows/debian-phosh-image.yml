@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 name: Debian IMG
 permissions:
-  contents: write
+  contents: read
+  actions: read
 concurrency:
   group: debian-img-${{ github.sha }}
   cancel-in-progress: false
@@ -74,7 +75,6 @@ jobs:
       kind: ${{ matrix.kind }}
       input_key: ${{ matrix.kind == 'phosh' && needs.inputs.outputs.phosh_key || needs.inputs.outputs.minimal_key }}
       base_key: ${{ needs.inputs.outputs.base_key }}
-    secrets: inherit
   timings:
     if: always()
     needs:

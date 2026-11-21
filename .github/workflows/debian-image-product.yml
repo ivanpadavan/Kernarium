@@ -12,11 +12,9 @@ name: Debian image product
       base_key:
         required: true
         type: string
-    secrets:
-      DEBIAN_RELEASE_TOKEN:
-        required: false
 permissions:
-  contents: write
+  contents: read
+  actions: read
 jobs:
   image:
     runs-on: ubuntu-24.04-arm
@@ -24,7 +22,6 @@ jobs:
     env:
       PRODUCT: debian-13-${{ inputs.kind }}
       INPUT_KEY: ${{ inputs.input_key }}
-      TAG: debian-13-${{ inputs.kind }}-${{ github.run_id }}-${{ github.run_attempt }}
       GH_TOKEN: ${{ github.token }}
     steps:
     - uses: actions/checkout@v4
@@ -52,13 +49,6 @@ jobs:
     - name: Verify image delivery hashes and source provenance
       run: |
         python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/image-release" --kind "debian-${{ inputs.kind }}" --key "$INPUT_KEY"
-    - name: Make checked IMG draft assets available immediately
-      continue-on-error: true
-      env:
-        GH_TOKEN: ${{ secrets.DEBIAN_RELEASE_TOKEN || github.token }}
-      run: |
-        gh release create "$TAG" --target "$GITHUB_SHA" --draft --title "$PRODUCT" --notes "Integrity checked. Guest boot qualification is running. Draft assets are available for testing."
-        gh release upload "$TAG" "$RUNNER_TEMP/image-release/"*
     - uses: actions/cache/save@v4
       if: steps.image.outputs.cache-hit != 'true'
       with:
@@ -75,7 +65,6 @@ jobs:
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: debian-13-${{ inputs.kind }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
     - uses: actions/checkout@v4
     - uses: actions/download-artifact@v4
@@ -96,7 +85,7 @@ jobs:
     - name: Real guest boots, clipboard, TTY and persistence
       run: |
         python3 -B tools/ci/run-debian-simulator.py --products .build/validator/Products --image "$RUNNER_TEMP/debian-13-${{ inputs.kind }}.img" --kind '${{ inputs.kind }}' --features --output "$RUNNER_TEMP/boot-results"
-    - name: Publish only a completely qualified image
+    - name: Record complete image qualification without publishing
       run: |
         python3 - <<'PY'
         import json, os
@@ -109,14 +98,16 @@ jobs:
           run_id=os.environ['GITHUB_RUN_ID'], tests={phase: json.loads((root / 'boot-results' / (phase + '-summary.json')).read_text()) for phase in ('write', 'read')})
         (root / 'qualification.json').write_text(json.dumps(qualification, indent=2) + '\n')
         PY
-        if ! gh release view "$TAG" >/dev/null 2>&1; then
-          gh release create "$TAG" --target "$GITHUB_SHA" --draft --title 'Qualified Debian image' --notes 'Guest boot tests passed.'
-          gh release upload "$TAG" "$RUNNER_TEMP/image-release/"*
-        fi
-        gh release upload "$TAG" "$RUNNER_TEMP/qualification.json"
-        gh release edit "$TAG" --draft=false --prerelease --notes "Real Simulator guest boot, local login, TTY sizing, write/read persistence and clean shutdown passed. Phosh additionally checks GUI frames, clipboard UTF-8 roundtrip and automatic Squeekboard startup. Physical iPhone gesture checks remain separate."
-      env:
-        GH_TOKEN: ${{ secrets.DEBIAN_RELEASE_TOKEN || github.token }}
+        mkdir -p "$RUNNER_TEMP/qualified-image/image"
+        cp -R "$RUNNER_TEMP/image-release/." "$RUNNER_TEMP/qualified-image/image/"
+        cp "$RUNNER_TEMP/qualification.json" "$RUNNER_TEMP/qualified-image/"
+        python3 -B tools/ci/debian-artifacts.py record --root "$RUNNER_TEMP/qualified-image" --kind 'qualified-debian-${{ inputs.kind }}' --key '${{ inputs.input_key }}'
+        python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/qualified-image" --kind 'qualified-debian-${{ inputs.kind }}' --key '${{ inputs.input_key }}'
+    - uses: actions/upload-artifact@v4
+      with:
+        name: qualified-image-${{ inputs.kind }}
+        path: ${{ runner.temp }}/qualified-image/
+        compression-level: 0
     - name: Preserve failures and actual test counts
       if: always()
       uses: actions/upload-artifact@v4
