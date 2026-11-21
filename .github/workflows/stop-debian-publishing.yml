@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Retire release-enabled Debian runs
+on:
+  push:
+    branches: [debian-phosh]
+    paths: [.github/workflows/stop-debian-publishing.yml]
+permissions:
+  actions: write
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Stop prior runs that still contain publication steps
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for run in 44958417924 44959139433 44959139435; do
+            status=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .status)
+            if [ "$status" != completed ]; then
+              gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$run/cancel"
+            fi
+          done
