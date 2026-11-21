@@ -51,7 +51,7 @@ struct DebianStorageTests {
             SerialConsoleController.sendToGuest(Data(command.utf8))
             try await Task.sleep(for: .seconds(5))
         }
-        try #require(output.text.contains(marker), output.text)
+        try #require(output.text.contains(marker), "\(output.text)")
         try #require(try await eventually(within: .seconds(120)) {
             if case .ended(result: 0) = EmulatorLauncher.shared.phase { return output.text.contains("reboot: Power down") }
             return false

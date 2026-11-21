@@ -166,3 +166,21 @@ runs:
     with:
       path: .build/kernarium-xcframeworks
       key: ${{ steps.runtime-cache.outputs.cache-primary-key }}
+  - name: Report verified cache reuse
+    if: always()
+    shell: bash
+    env:
+      CACHE_EVIDENCE: >-
+        {"platform":"${{ inputs.platform }}","sources":"${{ steps.ios-sources.outputs.cache-hit }}","gpu":"${{ steps.ios-gpu.outputs.cache-hit }}","network":"${{ steps.ios-network.outputs.cache-hit }}","storage":"${{ steps.ios-storage.outputs.cache-hit }}","compression":"${{ steps.ios-compression.outputs.cache-hit }}","runtime":"${{ steps.runtime-cache.outputs.cache-hit }}"}
+    run: |
+      python3 - <<'PY'
+      import json, os
+      from pathlib import Path
+      evidence = json.loads(os.environ['CACHE_EVIDENCE'])
+      Path('apple-cache-' + evidence['platform'] + '.json').write_text(json.dumps(evidence, indent=2) + '\n')
+      print('CACHE_REUSE:', json.dumps(evidence), flush=True)
+      with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
+          summary.write('| ' + evidence.pop('platform') + ' cache | Exact hit |\n| --- | --- |\n')
+          for product, hit in evidence.items():
+              summary.write(f'| {product} | {hit or "not reached"} |\n')
+      PY

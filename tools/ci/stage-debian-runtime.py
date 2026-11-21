@@ -20,8 +20,8 @@ def run(*args):
 def main():
     origin = '32e5dbbf7a135652bfb17cfc522ed0c98cd58c3f'
     for component in ('kernel', 'boot-base'):
-        current = inputs.Repository().identities()[component]
-        accepted = inputs.Repository(origin).identities()[component]
+        current = inputs.Repository().identity(component)
+        accepted = inputs.Repository(origin).identity(component)
         if current != accepted:
             raise RuntimeError(f'The accepted {component} artifact has different source inputs; accept a replacement first')
     download = Path('.build/accepted-inputs')
