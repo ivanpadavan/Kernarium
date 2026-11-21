@@ -6,8 +6,10 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import queue
 import shutil
 import subprocess
+import threading
 import time
 
 
@@ -70,15 +72,28 @@ def main():
     parser.add_argument('--single-phase', action='store_true')
     parser.add_argument('--family', choices=['iPad', 'iPhone'], default='iPad')
     parser.add_argument('--ui-case', help='A concrete KernariumUITests class/method to execute')
+    parser.add_argument('--state', type=Path, help='Reuse one Simulator across app test suites')
+    parser.add_argument('--cleanup', action='store_true')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if args.cleanup:
+        if args.state and args.state.exists():
+            udid = json.loads(args.state.read_text())['device']
+            subprocess.run(['xcrun', 'simctl', 'shutdown', udid], timeout=60)
+            subprocess.run(['xcrun', 'simctl', 'delete', udid], check=True, timeout=60)
+            args.state.unlink()
+        return
     products = args.products.resolve()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    udid = create_simulator(args.family)
+    reused = bool(args.state and args.state.exists())
+    udid = json.loads(args.state.read_text())['device'] if reused else create_simulator(args.family)
+    if args.state and not reused:
+        args.state.write_text(json.dumps({'device': udid}) + '\n')
     container = None
     try:
-        run('xcrun', 'simctl', 'boot', udid)
+        if not reused:
+            run('xcrun', 'simctl', 'boot', udid)
         run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
         app = products / 'Release-iphonesimulator/Kernarium.app'
         run('xcrun', 'simctl', 'install', udid, str(app), timeout=300)
@@ -86,6 +101,9 @@ def main():
         documents = container / 'Documents'
         documents.mkdir(exist_ok=True)
         if args.image:
+            destination = documents / args.image.name
+            if destination.exists():
+                destination.unlink()
             run('cp', '-c', str(args.image.resolve()), str(documents / args.image.name), timeout=300)
         originals = list(products.glob('*.xctestrun'))
         assert len(originals) == 1, originals
@@ -122,17 +140,34 @@ def main():
             with (output / (phase + '-boot.log')).open('w') as log:
                 process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                            env={**os.environ, **{'TEST_RUNNER_' + k: v for k, v in environment.items()}})
-                # communicate has a fixed deadline even when no output arrives.
+                lines = queue.Queue()
+                def read_lines():
+                    try:
+                        for line in process.stdout:
+                            lines.put(line)
+                    finally:
+                        lines.put(None)
+                threading.Thread(target=read_lines, daemon=True).start()
+                deadline = time.monotonic() + 1200
                 try:
-                    stdout, _ = process.communicate(timeout=1200)
-                except subprocess.TimeoutExpired:
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, 1200)
+                        try:
+                            line = lines.get(timeout=min(remaining, 1))
+                        except queue.Empty:
+                            continue
+                        if line is None:
+                            break
+                        log.write(line)
+                        log.flush()
+                        print(line, end='', flush=True)
+                    process.wait(timeout=max(1, deadline - time.monotonic()))
+                except BaseException:
                     process.kill()
-                    stdout, _ = process.communicate(timeout=30)
-                    log.write(stdout)
-                    print(stdout, flush=True)
+                    process.wait(timeout=30)
                     raise
-                log.write(stdout)
-                print(stdout, flush=True)
             summary = json.loads(capture('xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result)))
             (output / (phase + '-summary.json')).write_text(json.dumps(summary, indent=2) + '\n')
             counts = {k: summary.get(k) for k in ('totalTestCount', 'passedTests', 'failedTests', 'skippedTests')}
@@ -169,8 +204,9 @@ def main():
         except (OSError, subprocess.SubprocessError) as error:
             print('Diagnostic collection:', error, flush=True)
         finally:
-            subprocess.run(['xcrun', 'simctl', 'shutdown', udid], timeout=60)
-            subprocess.run(['xcrun', 'simctl', 'delete', udid], timeout=60)
+            if not args.state:
+                subprocess.run(['xcrun', 'simctl', 'shutdown', udid], timeout=60)
+                subprocess.run(['xcrun', 'simctl', 'delete', udid], timeout=60)
 
 
 if __name__ == '__main__':

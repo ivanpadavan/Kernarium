@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 name: Debian IPA
 permissions:
-  contents: write
+  contents: read
+  actions: read
 concurrency:
   group: debian-ipa-${{ github.sha }}
   cancel-in-progress: false
@@ -45,7 +46,6 @@ jobs:
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: debian-ipa-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -81,14 +81,6 @@ jobs:
         python3 -B tools/ci/debian-artifacts.py record --root "$RUNNER_TEMP/ipa-release" --kind ipa --key "$GITHUB_SHA"
         python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/ipa-release" --kind ipa --key "$GITHUB_SHA"
         cp -c "$RUNNER_TEMP/ipa-release/provenance.json" "$RUNNER_TEMP/provenance.json"
-    - name: Make checked IPA draft assets available immediately
-      if: matrix.sdk == 'device'
-      continue-on-error: true
-      env:
-        GH_TOKEN: ${{ secrets.DEBIAN_RELEASE_TOKEN || github.token }}
-      run: |
-        gh release create "$TAG" --target "$GITHUB_SHA" --draft --title 'Kernarium Debian IPA' --notes 'Integrity checked; Simulator tests are running.'
-        gh release upload "$TAG" "$RUNNER_TEMP/ipa-release/"*
     - name: Build the matching Simulator test host
       if: matrix.sdk == 'simulator'
       run: |
@@ -119,7 +111,6 @@ jobs:
     timeout-minutes: 90
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: debian-ipa-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
     - uses: actions/checkout@v4
     - uses: actions/download-artifact@v4
@@ -134,25 +125,25 @@ jobs:
         tar -C .build/test-host -xzf "$RUNNER_TEMP/host/debian-app-test-host.tar.gz"
         python3 -B tools/ci/debian-artifacts.py verify --root .build/test-host/Products --kind app-test-host --key "$GITHUB_SHA"
     - name: Clipboard, native selection and terminal resize tests
-      run: python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --suite DebianAppTests --output "$RUNNER_TEMP/app-results"
+      run: python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --suite DebianAppTests --output "$RUNNER_TEMP/app-results"
     - name: Check modifier reset through the application's visible controls
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
-        python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --ui-case KernariumUITests/testGraphicalModifiersAreReleasedWhenChangingModes --output "$RUNNER_TEMP/ui-results"
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --ui-case KernariumUITests/testGraphicalModifiersAreReleasedWhenChangingModes --output "$RUNNER_TEMP/ui-results"
     - name: Fetch a previously boot-qualified Phosh disk without building any image
-      run: python3 -B tools/ci/qualified-debian-image.py --output "$RUNNER_TEMP/golden-image"
+      run: python3 -B tools/ci/qualified-debian-image.py --wait-seconds 1800 --output "$RUNNER_TEMP/golden-image"
     - name: Preserve the original real Phosh-to-console persistence smoke
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
-        python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite PersistentDebianTests --output "$RUNNER_TEMP/persistent-results"
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite PersistentDebianTests --output "$RUNNER_TEMP/persistent-results"
     - name: Check tmux panes and status from rendered screen pixels
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
-        python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianMobileTests --single-phase --output "$RUNNER_TEMP/mobile-results"
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianMobileTests --single-phase --output "$RUNNER_TEMP/mobile-results"
     - name: Increase the disk before boot and check ext4 and data across two reboots
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
-        python3 -B tools/ci/run-debian-simulator.py --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianStorageTests --storage --output "$RUNNER_TEMP/storage-results"
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianStorageTests --storage --output "$RUNNER_TEMP/storage-results"
     - name: Record actual complete application qualification
       run: |
         python3 - <<'PYTHON'
@@ -164,7 +155,7 @@ jobs:
         for summary in tests.values():
             assert summary['totalTestCount']>0 and summary['passedTests']==summary['totalTestCount']
             assert summary['failedTests']==summary['skippedTests']==0
-        qualification=dict(kind='ipa',source_revision=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],image=json.loads((root/'golden-image/qualification.json').read_text()),tests=tests)
+        qualification=dict(kind='ipa',source_revision=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],image=json.loads((root/'golden-image/selected-image.json').read_text()),tests=tests)
         (root/'app-qualification.json').write_text(json.dumps(qualification,indent=2)+'\n')
         PYTHON
     - uses: actions/upload-artifact@v4
@@ -182,14 +173,15 @@ jobs:
           ${{ runner.temp }}/mobile-results/
           ${{ runner.temp }}/storage-results/
         if-no-files-found: warn
+    - name: Clean up the shared test Simulator
+      if: always()
+      run: python3 -B tools/ci/run-debian-simulator.py --cleanup --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --output "$RUNNER_TEMP/cleanup"
   timings:
     if: always()
     needs:
     - inputs
     - build
     - tests
-    - draft
-    - publish
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -204,48 +196,6 @@ jobs:
       with:
         name: ipa-stage-times
         path: debian-stage-times.json
-  draft:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      GH_TOKEN: ${{ secrets.DEBIAN_RELEASE_TOKEN || github.token }}
-      TAG: debian-ipa-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v4
-      with:
-        name: app-device
-        path: ${{ runner.temp }}/ipa
-    - uses: actions/download-artifact@v4
-      with:
-        name: app-simulator
-        path: ${{ runner.temp }}/simulator
-    - name: Create or complete the independent IPA draft
-      run: |
-        if ! gh release view "$TAG" >/dev/null 2>&1; then
-          gh release create "$TAG" --target "$GITHUB_SHA" --draft --title 'Kernarium Debian IPA' --notes 'Checked IPA and matching Simulator host. App tests are running.'
-        fi
-        gh release upload "$TAG" "$RUNNER_TEMP/ipa/"* "$RUNNER_TEMP/simulator/"* --clobber
-  publish:
-    needs:
-    - tests
-    - draft
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      GH_TOKEN: ${{ secrets.DEBIAN_RELEASE_TOKEN || github.token }}
-      TAG: debian-ipa-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v4
-      with:
-        name: ipa-qualification
-        path: ${{ runner.temp }}/qualification
-    - name: Publish only after all required application checks pass
-      run: |
-        gh release upload "$TAG" "$RUNNER_TEMP/qualification/app-qualification.json"
-        gh release edit "$TAG" --draft=false --prerelease --notes 'Unsigned iOS 27+ IPA. Native clipboard/selection tests, modifier UI, real Phosh/console persistence, visible tmux screenshots and disk growth passed in the matching Simulator. Physical iPhone gesture and device runtime checks remain separate.'
 'on':
   push:
     branches:

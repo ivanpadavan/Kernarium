@@ -42,9 +42,11 @@ GROUPS = {
     'app-ci': ['.github/workflows/debian-app.yml', '.github/actions/apple-runtime/**',
                'tools/ci/apple-product-key.py', 'tools/ci/debian-artifacts.py',
                'tools/ci/stage-debian-runtime.py', 'tools/ci/qualified-debian-image.py',
+               'tools/ci/actions_artifact.py', 'tools/ci/fetch-debian-app.py',
                'tools/ci/run-debian-simulator.py', 'tools/ci/debian-inputs.py'],
     'image-ci': ['.github/workflows/debian-phosh-image.yml', '.github/workflows/debian-image-product.yml',
                  'tools/ci/debian-artifacts.py', 'tools/ci/debian-image.sh',
+                 'tools/ci/actions_artifact.py',
                  'tools/ci/debian-inputs.py'],
 }
 
