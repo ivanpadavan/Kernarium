@@ -40,8 +40,8 @@ final class KernariumUITests: XCTestCase {
 
         let trayButton = app.buttons["specialKeysButton"]
         XCTAssertTrue(trayButton.waitForExistence(timeout: 10))
-        XCTAssertEqual(trayButton.frame.width, 32, accuracy: 1)
-        XCTAssertEqual(trayButton.frame.height, 32, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(trayButton.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(trayButton.frame.height, 44)
         XCTAssertFalse(app.buttons["guestPowerButton"].exists)
 
         trayButton.tap()
@@ -76,6 +76,31 @@ final class KernariumUITests: XCTestCase {
 
         displayModeButton.tap()
         XCTAssertEqual(displayModeButton.label, "Show serial console")
+    }
+
+    @MainActor
+    func testGraphicalModifiersAreReleasedWhenChangingModes() throws {
+        let app = testApplication()
+        app.launch()
+        let tray = app.buttons["specialKeysButton"]
+        XCTAssertTrue(tray.waitForExistence(timeout: 10))
+        tray.tap()
+        for name in ["Ctrl", "Shift", "Alt"] {
+            let modifier = app.buttons["guestModifier\(name)"]
+            XCTAssertTrue(modifier.exists)
+            XCTAssertEqual(modifier.value as? String, "Off")
+            modifier.tap()
+            XCTAssertEqual(modifier.value as? String, "On")
+        }
+        app.buttons["displayModeButton"].tap()
+        app.buttons["displayModeButton"].tap()
+        tray.tap()
+        for name in ["Ctrl", "Shift", "Alt"] {
+            XCTAssertEqual(app.buttons["guestModifier\(name)"].value as? String, "Off")
+        }
+        for key in ["guestLeftButton", "guestUpButton", "guestDownButton", "guestRightButton", "guestTmuxPrefix", "guestTerminalPaste"] {
+            XCTAssertTrue(app.buttons[key].exists, key)
+        }
     }
 
     /// Tapping the serial console raises the software keyboard with the

@@ -66,6 +66,8 @@ def main():
     parser.add_argument('--kind', default='phosh')
     parser.add_argument('--suite', default='DebianImageTests')
     parser.add_argument('--features', action='store_true')
+    parser.add_argument('--storage', action='store_true')
+    parser.add_argument('--single-phase', action='store_true')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     products = args.products.resolve()
@@ -85,16 +87,25 @@ def main():
         originals = list(products.glob('*.xctestrun'))
         assert len(originals) == 1, originals
         original = plistlib.loads(originals[0].read_bytes())
-        phases = ('write', 'read') if args.image else ('unit',)
+        phases = ('write', 'grow', 'read') if args.storage else (('write', 'read') if args.image else ('unit',))
+        if args.single_phase:
+            phases = phases[:1]
         for phase in phases:
+            if args.storage and phase == 'grow':
+                image = documents / args.image.name
+                before = image.stat()
+                target = ((before.st_size // (1024**3)) + 2) * (1024**3)
             environment = {
                 'KERNARIUM_ROOTFS': args.image.name if args.image else 'unit-tests-no-guest.img',
-                'KERNARIUM_LINUX_CONSOLE_BOOT': '0' if phase == 'write' and args.kind == 'phosh' else '1',
+                'KERNARIUM_LINUX_CONSOLE_BOOT': '0' if phase == 'write' and args.kind == 'phosh' and not args.storage else '1',
                 'KERNARIUM_IMAGE_SMOKE': '1' if args.suite == 'DebianImageTests' else '0',
                 'KERNARIUM_IMAGE_KIND': args.kind,
                 'KERNARIUM_IMAGE_PHASE': phase,
                 'KERNARIUM_IMAGE_FEATURES': '1' if args.features else '0',
                 'KERNARIUM_DEBIAN_SMOKE': phase if args.suite == 'PersistentDebianTests' else '',
+                'KERNARIUM_MOBILE_SMOKE': '1' if args.suite == 'DebianMobileTests' else '0',
+                'KERNARIUM_STORAGE_SMOKE': '1' if args.storage else '0',
+                'KERNARIUM_STORAGE_PHASE': phase,
             }
             configuration = plistlib.loads(plistlib.dumps(original))
             patch_targets(configuration, environment)
@@ -127,6 +138,12 @@ def main():
             assert counts['failedTests'] == 0 and counts['skippedTests'] == 0, counts
             if args.image:
                 assert counts['totalTestCount'] == 1, counts
+            if args.storage and phase == 'grow':
+                after = (documents / args.image.name).stat()
+                assert after.st_size == target and after.st_size > before.st_size
+                assert after.st_blocks * 512 < after.st_size, 'Growth must preserve a sparse image'
+                print('STORAGE_HOST_PROOF:', before.st_size, '->', after.st_size,
+                      'allocated bytes:', after.st_blocks * 512, flush=True)
     finally:
         try:
             container = Path(capture('xcrun', 'simctl', 'get_app_container', udid, 'com.imxieyi.Kernarium', 'data'))
