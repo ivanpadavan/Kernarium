@@ -163,8 +163,11 @@ Verified source/download trees are cached separately. No signing material is
 cached.
 The native ARM64 Linux job produces Debian and a new boot base, audited by the
 existing complete base verifier before acceptance. A
-separate macOS job produces the validated Linux kernel artifact; the iOS
-build consumes that artifact and never invokes Kbuild. No Android image or
+separate macOS job produces the validated Linux kernel artifact. CI stages a
+fully verified copy under its own distribution release identity, preserving
+the real replay banner, ELF, source tree and ABI; it never impersonates an
+upstream accepted release. The iOS build consumes that explicit artifact path
+and never invokes Kbuild. No Android image or
 Android kernel is built.
 
 The fork's Xcode target embeds Linux alone. Package it with
