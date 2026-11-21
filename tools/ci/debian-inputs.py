@@ -39,6 +39,7 @@ GROUPS = {
     'app': ['Kernarium/Kernarium/**', 'GuestHost/**',
             'Kernarium/Kernarium.xcodeproj/**', 'Kernarium/scripts/**'],
     'app-tests': ['Kernarium/KernariumTests/**', 'Kernarium/KernariumUITests/**'],
+    'jit-ci': ['tools/ci/jit-unit-deps.py'],
     'app-ci': ['.github/workflows/debian-app.yml', '.github/actions/apple-runtime/**',
                'tools/ci/apple-product-key.py', 'tools/ci/debian-artifacts.py',
                'tools/ci/stage-debian-runtime.py', 'tools/ci/qualified-debian-image.py',
@@ -177,7 +178,7 @@ def plan(before, after):
     images = [name for name in ('phosh', 'minimal')
               if name in changed or 'image-ci' in changed or kernel or boot_base]
     return dict(app=app, kernel=kernel, boot_base=boot_base, images=images,
-                runtime_tests='runtime' in changed,
+                runtime_tests=bool(changed & {'runtime', 'jit-ci'}),
                 base=bool(images), changed=sorted(changed), identities=after)
 
 

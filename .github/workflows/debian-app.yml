@@ -211,11 +211,30 @@ jobs:
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
+    - name: Fingerprint the pinned native unit dependency
+      id: unit-deps-key
+      run: |
+        brew install cmake ninja
+        echo "key=$(python3 -B tools/ci/jit-unit-deps.py --key)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: unit-deps
+      with:
+        path: .build/dependencies/jit-unit-zlib
+        key: jit-unit-zlib-v1-${{ runner.arch }}-${{ steps.unit-deps-key.outputs.key }}
+    - name: Build the verified native zlib only when absent
+      if: steps.unit-deps.outputs.cache-hit != 'true'
+      run: python3 -B tools/ci/jit-unit-deps.py --build --input-key "${{ steps.unit-deps-key.outputs.key }}"
+    - name: Verify native dependency hashes and source identity
+      run: python3 -B tools/ci/debian-artifacts.py verify --root .build/dependencies/jit-unit-zlib --kind jit-unit-zlib --key "${{ steps.unit-deps-key.outputs.key }}"
+    - uses: actions/cache/save@v4
+      if: steps.unit-deps.outputs.cache-hit != 'true'
+      with:
+        path: .build/dependencies/jit-unit-zlib
+        key: ${{ steps.unit-deps.outputs.cache-primary-key }}
     - name: Build and check the executable-memory owner
       run: |
         test "$(uname -m)" = arm64
-        brew install cmake ninja
-        cmake --preset macos-arm64-unit
+        cmake --preset macos-arm64-unit -DUML_DEPENDENCY_PREFIX="$PWD/.build/dependencies/jit-unit-zlib"
         cmake --build --preset jit-memory-test-binaries --parallel 3
         ctest --preset jit-memory --output-junit "$RUNNER_TEMP/jit-memory.xml"
         python3 - <<'PYTHON'
