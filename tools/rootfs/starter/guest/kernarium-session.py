@@ -11,6 +11,7 @@ import socketserver
 import stat
 import struct
 import subprocess
+import tempfile
 import termios
 
 PORT = 31337
@@ -30,14 +31,20 @@ def desktop_environment():
 
 
 def clipboard(arguments, contents=None):
-    result = subprocess.run(desktop_environment() + arguments,
-                            input=contents, capture_output=True, timeout=5)
-    if result.returncode:
-        detail = result.stderr.decode('utf-8', errors='replace').strip()
-        raise RuntimeError(detail or 'The desktop clipboard is unavailable')
-    if len(result.stdout) > LIMIT:
-        raise ValueError('Clipboard text exceeds 2 MiB')
-    return result.stdout.decode('utf-8', errors='strict')
+    # wl-copy forks a clipboard owner that outlives the request. Pipes make
+    # communicate() wait for that owner's inherited stderr to close.
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        result = subprocess.run(desktop_environment() + arguments, input=contents,
+                                stdout=output, stderr=errors, timeout=5)
+        if result.returncode:
+            errors.seek(0)
+            detail = errors.read(8192).decode('utf-8', errors='replace').strip()
+            raise RuntimeError(detail or 'The desktop clipboard is unavailable')
+        output.seek(0)
+        text = output.read(LIMIT + 1)
+        if len(text) > LIMIT:
+            raise ValueError('Clipboard text exceeds 2 MiB')
+        return text.decode('utf-8', errors='strict')
 
 
 def dispatch(request):
