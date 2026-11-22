@@ -18,19 +18,54 @@ jobs:
         XCODE_PATH=$(python3 -c 'import pathlib; p=sorted(pathlib.Path("/Applications").glob("Xcode_27*.app")); print(p[-1] if p else "/Applications/Xcode.app")')
         sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
     - name: Fetch and verify the chosen existing products
+      id: products
       run: |
         python3 -B tools/ci/fetch-debian-app.py --run-id "$APP_RUN" --output "$RUNNER_TEMP/app"
         python3 -B tools/ci/qualified-debian-image.py --artifact-id "$IMAGE_ARTIFACT" --output "$RUNNER_TEMP/image"
     - name: Real boot and persistence with the selected app build and disk
       run: |
-        python3 -B tools/ci/run-debian-simulator.py --products "$RUNNER_TEMP/app/Products" --image "$RUNNER_TEMP/image/debian-13-phosh.img" --suite PersistentDebianTests --output "$RUNNER_TEMP/pair-results"
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/pair-state.json" --products "$RUNNER_TEMP/app/Products" --image "$RUNNER_TEMP/image/debian-13-phosh.img" --suite PersistentDebianTests --output "$RUNNER_TEMP/pair-results/persistence"
+    - name: Graphical clipboard, special keys and visible serial tmux with the selected pair
+      run: |
+        rm -f "$RUNNER_TEMP/app/Products/selected.xctestrun"
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/pair-state.json" --products "$RUNNER_TEMP/app/Products" --image "$RUNNER_TEMP/image/debian-13-phosh.img" --suite DebianMobileTests --single-phase --output "$RUNNER_TEMP/pair-results/mobile"
+    - name: Grow and reboot the selected disk with this application
+      if: ${{ !cancelled() && steps.products.outcome == 'success' }}
+      run: |
+        rm -f "$RUNNER_TEMP/app/Products/selected.xctestrun"
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/pair-state.json" --products "$RUNNER_TEMP/app/Products" --image "$RUNNER_TEMP/image/debian-13-phosh.img" --suite DebianStorageTests --storage --output "$RUNNER_TEMP/pair-results/storage"
+    - name: Require all six actual guest tests for this pair
+      run: |
+        python3 - <<'PYTHON'
+        import json, os
+        from pathlib import Path
+        root = Path(os.environ['RUNNER_TEMP']) / 'pair-results'
+        results = {str(path.relative_to(root)): json.loads(path.read_text()) for path in root.glob('*/*-summary.json')}
+        assert len(results) == 6, results
+        for summary in results.values():
+            assert summary['totalTestCount'] == summary['passedTests'] == 1
+            assert summary['failedTests'] == summary['skippedTests'] == 0
+        (root / 'qualification.json').write_text(json.dumps(dict(app_run=os.environ['APP_RUN'],image_artifact=os.environ['IMAGE_ARTIFACT'],tests=results), indent=2) + '\n')
+        print('ACTUAL_PAIR_TESTS: 6 passed; zero failed or skipped')
+        PYTHON
     - uses: actions/upload-artifact@v4
       if: always()
       with:
         name: chosen-product-compatibility
         path: ${{ runner.temp }}/pair-results/
         if-no-files-found: warn
+    - name: Clean up the selected pair's Simulator
+      if: always()
+      run: python3 -B tools/ci/run-debian-simulator.py --cleanup --state "$RUNNER_TEMP/pair-state.json" --products "$RUNNER_TEMP/app/Products" --output "$RUNNER_TEMP/pair-cleanup"
 'on':
+  workflow_call:
+    inputs:
+      app_run_id:
+        required: true
+        type: string
+      image_artifact_id:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       app_run_id:
