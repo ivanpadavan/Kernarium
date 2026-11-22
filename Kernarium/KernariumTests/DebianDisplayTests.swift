@@ -5,6 +5,7 @@ import CoreVideo
 import Foundation
 import Testing
 import UIKit
+import Vision
 @testable import Kernarium
 
 /// The real runtime and Phosh compositor, with measured screen configurations
@@ -39,6 +40,8 @@ struct DebianDisplayTests {
         let readyDeadline = ContinuousClock.now.advanced(by: .seconds(600))
         while !output.text.contains("DISPLAY_guest_READY"), ContinuousClock.now < readyDeadline {
             send("test \"$(id -un)\" = debian && pgrep -x phosh >/dev/null && pgrep -x phoc >/dev/null && " +
+                 "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus " +
+                 "systemctl --user is-active --quiet graphical-session.target && " +
                  "cat /proc/sys/kernel/random/boot_id > /home/debian/.display-boot-id && " +
                  "pgrep -x phosh > /home/debian/.display-phosh-pid && " +
                  "printf 'display-persistent\\n' > /home/debian/.display-data && printf 'DISPLAY_%s_READY\\n' guest")
@@ -47,6 +50,34 @@ struct DebianDisplayTests {
         try #require(output.text.contains("DISPLAY_guest_READY"))
         try #require(GuestFrameStream.shared.subscribe(id: observer, width: 4095, fps: 10) { frame = $0 } == 0)
         let context = CIContext()
+        func desktopVisible(_ geometry: GuestDisplayRequest?, named name: String) async throws {
+            var lastImage: CGImage?
+            var lastText = ""
+            let visible = try await eventually(within: .seconds(120), every: .milliseconds(500)) {
+                guard let frame else { return false }
+                if let geometry,
+                   CVPixelBufferGetWidth(frame) != geometry.width || CVPixelBufferGetHeight(frame) != geometry.height {
+                    return false
+                }
+                let image = CIImage(cvPixelBuffer: frame)
+                guard let cg = context.createCGImage(image, from: image.extent) else { return false }
+                lastImage = cg
+                let text = VNRecognizeTextRequest()
+                text.recognitionLevel = .accurate
+                text.usesLanguageCorrection = false
+                do { try VNImageRequestHandler(cgImage: cg).perform([text]) }
+                catch { lastText = error.localizedDescription; return false }
+                lastText = (text.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+                // A compositor scanout can still show the session's spinner.
+                // Phosh's rendered clock proves that its interface is visible.
+                return lastText.range(of: #"\b(?:[01]?\d|2[0-3]):[0-5]\d\b"#, options: .regularExpression) != nil
+            }
+            if let lastImage, let png = UIImage(cgImage: lastImage).pngData() {
+                Attachment.record(png, named: name + ".png")
+            }
+            try #require(visible, "Phosh's visible interface did not finish rendering: \(lastText)")
+        }
+        try await desktopVisible(nil, named: "phone-before-resize")
         func verify(_ request: GuestDisplayRequest, name: String) async throws {
             let confirmed = try await eventually(within: .seconds(150), every: .milliseconds(250)) {
                 GuestDisplayConfiguration.shared.applied == request
@@ -63,15 +94,10 @@ struct DebianDisplayTests {
                 guard let frame else { return false }
                 return CVPixelBufferGetWidth(frame) == request.width && CVPixelBufferGetHeight(frame) == request.height
             }, "The runtime did not render the confirmed resolution")
-            if let frame {
-                let image = CIImage(cvPixelBuffer: frame)
-                if let cg = context.createCGImage(image, from: image.extent), let png = UIImage(cgImage: cg).pngData() {
-                    Attachment.record(png, named: name + ".png")
-                }
-            }
+            try await desktopVisible(request, named: name)
             let reply = try await GuestSession.request(request.sessionRequest)
             try #require(reply.width == request.width && reply.height == request.height)
-            print("DISPLAY_PROOF: \(name) compositor readback and runtime pixels \(request.width)x\(request.height)")
+            print("DISPLAY_PROOF: \(name) visible Phosh clock, compositor readback and runtime pixels \(request.width)x\(request.height)")
         }
         for (width, height) in [(1280, 720), (1920, 1080)] {
             let request = GuestDisplayRequest(width: width, height: height,
