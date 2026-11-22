@@ -239,8 +239,12 @@ struct DebianMobileTests {
         try await command("test ! -e /home/debian/.graphical-keys && printf 'GRAPHIC_%s_OK\\n' notexecuted",
                           marker: "GRAPHIC_notexecuted_OK", output: output)
         key(28)
-        try await command("test \"$(cat /home/debian/.graphical-keys)\" = GUIKEYTYPED && printf 'GRAPHIC_%s_OK\\n' pasted",
-                          marker: "GRAPHIC_pasted_OK", output: output)
+        // The serial shell can run between the graphical shell's redirection
+        // (which creates the file) and printf. Wait for the completed write.
+        try #require(try await eventually(within: .seconds(30), every: .seconds(1)) {
+            send("test \"$(cat /home/debian/.graphical-keys 2>/dev/null)\" = GUIKEYTYPED && printf 'GRAPHIC_%s_OK\\n' pasted\n")
+            return output.text.contains("GRAPHIC_pasted_OK")
+        }, "The graphical terminal did not execute its pasted command after Enter")
         try await paste("tmux -L graphical new-session -s graphical 'printf \"GRAPHIC%sREADY\\n\" TMUX; exec bash'", ready: "TMUX")
         key(28)
         try await screen("GRAPHICTMUXREADY", named: "graphical-tmux-ready")

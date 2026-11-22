@@ -43,6 +43,9 @@ The guest session service accepts explicit clipboard transfers and serial TTY
 geometry over host-only virtio-vsock. Clipboard transfers do not send console
 input. The Phosh image starts Squeekboard with its graphical user session and
 offers GNOME Console as its default terminal.
+Its display extension accepts mandatory pixel width and height, applies the
+Phosh output mode and confirms the current mode before acknowledging. Optional
+host screen metadata is advisory and does not set the compositor's UI scale.
 
 `debian-13-minimal-armhf.img` is the opt-in 32-bit Arm twin of the minimal
 Debian image for AArch32 guests (see below).

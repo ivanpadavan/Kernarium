@@ -11,6 +11,9 @@ nonisolated struct GuestSessionRequest: Codable, Sendable {
     var text: String?
     var rows: Int?
     var columns: Int?
+    var width: Int?
+    var height: Int?
+    var metadata: GuestScreenMetadata?
 }
 
 nonisolated struct GuestSessionReply: Codable, Sendable {
@@ -20,6 +23,9 @@ nonisolated struct GuestSessionReply: Codable, Sendable {
     var text: String?
     var rows: Int?
     var columns: Int?
+    var width: Int?
+    var height: Int?
+    var output: String?
 }
 
 nonisolated enum GuestSessionError: LocalizedError {

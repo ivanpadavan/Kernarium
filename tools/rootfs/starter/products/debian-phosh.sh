@@ -13,7 +13,7 @@ build_debian_phosh()
 		gnome-session-bin gnome-session-common gnome-settings-daemon \
 		gnome-settings-daemon-common squeekboard \
 		libgl1-mesa-dri libegl-mesa0 sudo openssh-server procps wl-clipboard gnome-console \
-		libglib2.0-bin dconf-cli at-spi2-core polkitd librsvg2-common
+		libglib2.0-bin dconf-cli at-spi2-core polkitd librsvg2-common wlr-randr
 	as_root test -x "$root/usr/bin/phosh-session"
 	as_root test -x "$root/usr/sbin/agreety"
 	as_root chroot "$root" useradd --create-home --uid 1000 --shell /bin/bash debian
@@ -93,6 +93,14 @@ EOF
 configure_phosh_session()
 {
 	root=$1
+	as_root install -m 0755 "$SCRIPT_DIR/products/debian-phosh/kernarium-display-session.py" \
+		"$root/usr/libexec/kernarium-display-session"
+	write_root_file "$root/etc/systemd/system/kernarium-session.service.d/display.conf" 0644 <<'EOF'
+# SPDX-License-Identifier: GPL-2.0-or-later
+[Service]
+ExecStart=
+ExecStart=/usr/libexec/kernarium-display-session
+EOF
 	write_root_file "$root/etc/systemd/user/kernarium-squeekboard.service" 0644 <<'EOF'
 # SPDX-License-Identifier: GPL-2.0-or-later
 [Unit]

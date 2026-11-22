@@ -178,6 +178,7 @@ final class FrameMirror {
     private let deliver: @MainActor (CVPixelBuffer) -> Void
     private var relay: FrameRelay?
     private(set) var armedRate: UInt32?
+    private var armedWidth: UInt32?
 
     init(
         deliver: @escaping @MainActor (CVPixelBuffer) -> Void,
@@ -193,7 +194,7 @@ final class FrameMirror {
     /// Asks the runtime for frames of at most `width` pixels at `framesPerSecond`;
     /// the runtime's answer, 0 when it agreed.
     func arm(width: UInt32, framesPerSecond: UInt32) -> Int32 {
-        if armedRate == framesPerSecond { return 0 }
+        if armedRate == framesPerSecond, armedWidth == width { return 0 }
         let owner: FrameRelay
         if let relay {
             owner = relay
@@ -205,7 +206,10 @@ final class FrameMirror {
         let result = register(
             runtimeFrameSink, Unmanaged.passUnretained(owner).toOpaque(), width, framesPerSecond
         )
-        if result == 0 { armedRate = framesPerSecond }
+        if result == 0 {
+            armedRate = framesPerSecond
+            armedWidth = width
+        }
         return result
     }
 
@@ -214,6 +218,7 @@ final class FrameMirror {
             // Returns only once no delivery is running, so the relay can go.
             _ = register(nil, nil, 0, 0)
             armedRate = nil
+            armedWidth = nil
         }
         // A delivery still waiting on the main queue holds the relay: it shows
         // nothing once the relay is closed.
@@ -250,7 +255,8 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
     let layer = AVSampleBufferDisplayLayer()
     private var feed: (any PictureInPictureFeed)?
     private var pictureInPicture: AVPictureInPictureController?
-    private lazy var mirror = FrameMirror { [weak self] buffer in self?.show(buffer) }
+    private let frameSubscription = UUID()
+    private var armedRate: UInt32?
     private var guestRunning = false
     private var starting = false
     private var format: CMVideoFormatDescription?
@@ -361,8 +367,10 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
     }
 
     private func arm(rate: (width: UInt32, framesPerSecond: UInt32)) {
-        if mirror.armedRate == rate.framesPerSecond { return }
-        let result = mirror.arm(width: rate.width, framesPerSecond: rate.framesPerSecond)
+        if armedRate == rate.framesPerSecond { return }
+        let result = GuestFrameStream.shared.subscribe(id: frameSubscription,
+            width: rate.width, fps: rate.framesPerSecond) { [weak self] buffer in self?.show(buffer) }
+        if result == 0 { armedRate = rate.framesPerSecond }
         if result == 0 {
             print(
                 "Kernarium: picture in picture mirror \(rate.width) px, " +
@@ -374,10 +382,14 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
     }
 
     private func disarm() {
-        guard mirror.isHolding || pictureInPicture != nil else {
+        guard armedRate != nil || pictureInPicture != nil else {
             return
         }
-        mirror.disarm()
+        if armedRate != nil {
+            // Returns only once no delivery is running, so the relay can go.
+            GuestFrameStream.shared.unsubscribe(id: frameSubscription)
+            armedRate = nil
+        }
         feed?.flushRemovingDisplayedImage()
         format = nil
         if let resignObserver {

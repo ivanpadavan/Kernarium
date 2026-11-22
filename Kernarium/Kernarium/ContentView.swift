@@ -9,6 +9,8 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var serialConsole = SerialConsoleController()
     @StateObject private var clipboard = GuestClipboard()
+    @ObservedObject private var externalDisplay = GuestExternalDisplay.shared
+    @ObservedObject private var displayConfiguration = GuestDisplayConfiguration.shared
     @ObservedObject private var launcher = EmulatorLauncher.shared
     @ObservedObject private var backgroundSession = BackgroundSession.shared
     @ObservedObject private var backgroundJob = BackgroundJob.shared
@@ -35,12 +37,18 @@ struct ContentView: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
 
+                GuestExternalDisplayAnchor()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+
                 GuestDisplayView(
                     keyboardVisible: $framebufferKeyboardVisible,
                     scale: EmulatorLauncher.shared.displayScale,
-                    textModifierCodes: Set(heldModifiers.map(\.rawValue))
+                    textModifierCodes: Set(heldModifiers.map(\.rawValue)),
+                    pixelSizeOverride: externalDisplay.external?.pixelSize
                 ) { view, geometry in
                     EmulatorLauncher.shared.start(view: view, geometry: geometry)
+                    externalDisplay.phoneDidLayout(view)
                 }
                 .opacity(guestViewMode == .framebuffer ? 1 : 0)
                 .allowsHitTesting(guestViewMode == .framebuffer)
@@ -131,6 +139,16 @@ struct ContentView: View {
                 )
             }
         }
+        .overlay(alignment: .top) {
+            if let error = displayConfiguration.error ?? externalDisplay.error {
+                VStack(spacing: 8) {
+                    Text(error)
+                    Button("Retry display configuration") { externalDisplay.retry() }
+                }
+                .padding().background(.regularMaterial, in: .rect(cornerRadius: 12))
+                .accessibilityIdentifier("displayConfigurationError")
+            }
+        }
         .animation(
             .easeInOut(duration: 0.2), value: spacePause.pause != nil
         )
@@ -168,6 +186,7 @@ struct ContentView: View {
             serialConsole.stopObserving()
             GuestPersistence.shared.stopObserving()
             GuestPictureInPicture.shared.guestRunningChanged(false)
+            externalDisplay.guestRunningChanged(false)
             // The screen is going: the guest is asked to write its storage
             // back and is then stopped, off the main actor.
             EmulatorLauncher.shared.stop()
@@ -198,6 +217,7 @@ struct ContentView: View {
         }
         .onChange(of: launcher.phase) { _, phase in
             GuestPictureInPicture.shared.guestRunningChanged(phase == .running)
+            externalDisplay.guestRunningChanged(phase == .running)
             refreshKeepRunning()
             if phase == .running { startJobIfAutomationAsked() }
             // Nothing is left to type into, and the keyboard would cover
@@ -206,6 +226,9 @@ struct ContentView: View {
             releaseModifiers()
             framebufferKeyboardVisible = false
             serialConsole.resignFirstResponder()
+        }
+        .onChange(of: externalDisplay.external?.pixelSize) { _, _ in
+            releaseModifiers()
         }
     }
 

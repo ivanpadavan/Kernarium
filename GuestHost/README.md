@@ -141,6 +141,10 @@ copy to build for a device.
 
 ## Rules
 
+An application can override the drawable's pixel geometry for an external
+presentation while retaining the phone view for preview and input. Removing
+the override restores the selected point or native layout.
+
 The display forwards up to ten simultaneous UIKit contacts through the runtime
 API, each with an independent path and slot. Clipping a path to the visible
 guest rectangle releases only that contact. A contact the host takes away

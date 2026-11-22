@@ -29,8 +29,10 @@ def main() -> None:
         guest('/bin/sh', '-ec', 'command -v "$1" >/dev/null', 'audit', command)
 
     for command in ('phosh-session', 'phoc', 'gnome-session', 'squeekboard',
-                    'gsettings', 'wl-copy', 'wl-paste', 'kgx'):
+                    'gsettings', 'wl-copy', 'wl-paste', 'kgx', 'wlr-randr'):
         executable(command)
+    executable('/usr/libexec/kernarium-display-session')
+    assert 'ExecStart=/usr/libexec/kernarium-display-session' in read('/etc/systemd/system/kernarium-session.service.d/display.conf')
     pixbuf = root / 'usr/lib'
     assert any(pixbuf.glob('*/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.so')), 'SVG icon loader is absent'
     assert any('libpixbufloader_svg.so' in cache.read_text()

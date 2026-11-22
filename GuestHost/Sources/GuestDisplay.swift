@@ -59,6 +59,8 @@ struct GuestDisplayView: UIViewControllerRepresentable {
     var hardwareFocus = false
     /// Physical Linux modifiers held by Kernarium's graphical key panel.
     var textModifierCodes: Set<UInt16> = []
+    /// A host-selected external resolution; touch mapping still uses this view's viewport.
+    var pixelSizeOverride: CGSize?
     /// Told of each contact sent to the guest's touchscreen: its slot, and
     /// whether it is down. A test uses it to see which touches the guest got.
     var contactDidChange: (@MainActor (_ slot: Int, _ pressed: Bool) -> Void)?
@@ -76,6 +78,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
         view.touchDidBegin = touchDidBegin
         view.contactDidChange = contactDidChange
         view.scale = scale
+        view.pixelSizeOverride = pixelSizeOverride
         view.isPaused = true
         view.enableSetNeedsDisplay = true
         view.autoResizeDrawable = false
@@ -94,6 +97,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
         view.touchDidBegin = touchDidBegin
         view.contactDidChange = contactDidChange
         view.scale = scale
+        view.pixelSizeOverride = pixelSizeOverride
         view.hardwareInput = hardwareInput
         (view as? TextGuestMetalView)?.heldModifierCodes = textModifierCodes
         view.applyAccessibility(accessibility)
@@ -202,6 +206,9 @@ class GuestMetalView: MTKView, UIGestureRecognizerDelegate, UIPointerInteraction
     var touchDidBegin: (@MainActor () -> Void)?
     var contactDidChange: (@MainActor (_ slot: Int, _ pressed: Bool) -> Void)?
     var scale = GuestDisplayScale.points
+    var pixelSizeOverride: CGSize? {
+        didSet { if pixelSizeOverride != oldValue { cancelTrackedTouches() } }
+    }
     @objc private(set) var umlGuestResizeInProgress = false
     private var touchContacts = GuestTouchContacts<ObjectIdentifier>()
     private var guestContentSize: CGSize?
@@ -289,11 +296,13 @@ class GuestMetalView: MTKView, UIGestureRecognizerDelegate, UIPointerInteraction
               let layout = GuestDisplayLayout(
                   scale: scale, points: bounds.size, nativeScale: Double(screen.nativeScale)
               ) else { return }
-        drawableSize = layout.pixelSize
+        let pixels = pixelSizeOverride ?? layout.pixelSize
+        guard pixels.width.isFinite, pixels.height.isFinite, pixels.width >= 1, pixels.height >= 1 else { return }
+        drawableSize = pixels
         viewDidLayout?(
             self,
             GuestDisplayGeometry(
-                pixelSize: layout.pixelSize,
+                pixelSize: pixels,
                 dotsPerInch: UInt32(layout.dotsPerInch)
             )
         )

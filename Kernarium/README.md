@@ -356,6 +356,20 @@ Android's logical density on the kernel command line use that launch geometry.
 The touchscreen's absolute range is fixed at 0 through 32767 on both axes, and
 Kernarium maps the guest's visible rectangle in the view onto it.
 
+An external display connected by AirPlay or cable presents the same Debian
+desktop, while the phone keeps its touch and keyboard preview. UIKit's external
+scene supplies its pixel geometry; disconnecting restores the phone's current
+Point or Retina geometry. The image's session service applies the mode and
+confirms the compositor's actual resolution. A failed configuration appears in
+the phone interface with a retry action.
+
+Display requests require pixel width and height. Available public screen facts
+(point and native pixel dimensions, scales, modes, refresh limit, overscan,
+color gamut and EDR headroom) are optional metadata. Audio route names are
+identified as audio routes. Host scale is advisory; the image currently uses
+only width and height, and Phosh owns interface scaling. Physical AirPlay and
+LiveContainer scene forwarding require verification on the receiving setup.
+
 A host short of the space a hibernation image takes quiesces with
 `quiesce_resident` (runtime API 25), which keeps the guest's RAM in the process
 ([`docs/architecture.md`](../docs/architecture.md#hibernation)).
