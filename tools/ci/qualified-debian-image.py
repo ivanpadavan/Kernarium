@@ -29,7 +29,7 @@ def main():
         candidates = api(f'repos/{repository()}/actions/artifacts?name=qualified-image-{args.kind}&per_page=100')['artifacts']
         candidates = [a for a in candidates if not a['expired']]
         if candidates:
-            identifier = max(candidates, key=lambda a: a['id'])['id']
+            identifier = max(candidates, key=lambda a: (a['created_at'], a['id']))['id']
             break
         if time.monotonic() >= deadline:
             raise RuntimeError('No boot-qualified IMG artifact is available')
