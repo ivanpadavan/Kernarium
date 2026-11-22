@@ -72,7 +72,9 @@ struct DebianMobileTests {
         try #require(try await eventually(within: .seconds(30)) {
             promptVisible()
         }, "Ctrl+B did not open the tmux command prompt")
-        send(text + "\n")
+        // tmux reads a raw TTY: Return is CR, while LF is the distinct C-j
+        // key. A canonical shell accepts LF, but tmux's prompt does not.
+        send(text + "\r")
         try #require(try await eventually(within: .seconds(30)) { !promptVisible() },
                      "tmux did not finish its command prompt")
     }
