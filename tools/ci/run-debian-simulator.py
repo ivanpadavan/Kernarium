@@ -269,6 +269,11 @@ def main():
                 assert counts['totalTestCount'] == 5, counts
             elif args.suite == 'GuestJITTests':
                 assert counts['totalTestCount'] == 3, counts
+            # XCTest can migrate the application's data directory while
+            # installing its test host. Refresh the path, keeping that disk's
+            # contents, before inspecting it or starting the next phase.
+            container = application_container(udid)
+            documents = container / 'Documents'
             if args.storage and phase == 'grow':
                 after = (documents / args.image.name).stat()
                 assert after.st_size == target and after.st_size > before.st_size
