@@ -31,6 +31,10 @@ def main() -> None:
     for command in ('phosh-session', 'phoc', 'gnome-session', 'squeekboard',
                     'gsettings', 'wl-copy', 'wl-paste', 'kgx'):
         executable(command)
+    pixbuf = root / 'usr/lib'
+    assert any(pixbuf.glob('*/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.so')), 'SVG icon loader is absent'
+    assert any('libpixbufloader_svg.so' in cache.read_text()
+               for cache in pixbuf.glob('*/gdk-pixbuf-2.0/2.10.0/loaders.cache')), 'SVG icon loader is not registered'
     keyboard = configparser.ConfigParser(interpolation=None)
     keyboard.read_string(read('/etc/systemd/user/kernarium-squeekboard.service'))
     assert keyboard['Service']['BusName'] == 'sm.puri.OSK0'
@@ -83,7 +87,7 @@ def main() -> None:
     assert 'gnome-session' in read('/usr/bin/phosh-session')
     report = {'required_components': entries, 'local_account': 'debian, unlocked, no initial password',
               'console_autologin': ['ttyS0', 'hvc0', 'tty1'], 'ssh': 'owner keys only',
-              'default_terminal': terminal_id, 'automatic_keyboard_requests': True,
+              'default_terminal': terminal_id, 'automatic_keyboard_requests': True, 'svg_icons': True,
               'boot_tests': 'pending'}
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

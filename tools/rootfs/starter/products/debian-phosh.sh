@@ -13,7 +13,7 @@ build_debian_phosh()
 		gnome-session-bin gnome-session-common gnome-settings-daemon \
 		gnome-settings-daemon-common squeekboard \
 		libgl1-mesa-dri libegl-mesa0 sudo openssh-server procps wl-clipboard gnome-console \
-		libglib2.0-bin dconf-cli at-spi2-core polkitd
+		libglib2.0-bin dconf-cli at-spi2-core polkitd librsvg2-common
 	as_root test -x "$root/usr/bin/phosh-session"
 	as_root test -x "$root/usr/sbin/agreety"
 	as_root chroot "$root" useradd --create-home --uid 1000 --shell /bin/bash debian
