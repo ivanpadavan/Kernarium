@@ -16,15 +16,19 @@ class Desktop:
         self.size = (720, 1440)
         self.calls = []
         self.apply = True
+        self.refresh = 60
 
     def __call__(self, arguments):
         self.calls.append(arguments)
         if arguments:
             if self.apply:
                 self.size = tuple(map(int, arguments[-1].split('x')))
+                if '--custom-mode' in arguments:
+                    self.refresh = 0
             return ''
+        rate = f', {self.refresh:.6f} Hz' if self.refresh else ''
         return (f'Virtual-1 "Virtual monitor"\n  Enabled: yes\n  Modes:\n'
-                f'    {self.size[0]}x{self.size[1]} px, 60.000000 Hz (current)\n'
+                f'    {self.size[0]}x{self.size[1]} px{rate} (current)\n'
                 '    1280x720 px, 60.000000 Hz\n  Scale: 2.000000\n')
 
 
@@ -50,6 +54,13 @@ class DisplayRequests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     display.configure_display(dict(version=1, width=width, height=height), desktop)
                 self.assertEqual(desktop.calls, [])
+
+    def test_current_mode_without_a_reported_refresh_rate_is_accepted(self):
+        desktop = Desktop()
+        desktop.refresh = 0
+        reply = display.configure_display(dict(version=1, width=720, height=1440), desktop)
+        self.assertEqual((reply['width'], reply['height']), (720, 1440))
+        self.assertEqual(desktop.calls, [[], []])
 
     def test_failed_readback_is_not_reported_as_success(self):
         desktop = Desktop()

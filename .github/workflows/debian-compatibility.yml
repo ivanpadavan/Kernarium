@@ -29,24 +29,29 @@ jobs:
       run: |
         rm -f "$RUNNER_TEMP/app/Products/selected.xctestrun"
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/pair-state.json" --products "$RUNNER_TEMP/app/Products" --image "$RUNNER_TEMP/image/debian-13-phosh.img" --suite DebianMobileTests --single-phase --output "$RUNNER_TEMP/pair-results/mobile"
+    - name: Resize and restore the real desktop with the selected pair
+      if: ${{ !cancelled() && steps.products.outcome == 'success' }}
+      run: |
+        rm -f "$RUNNER_TEMP/app/Products/selected.xctestrun"
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/pair-state.json" --products "$RUNNER_TEMP/app/Products" --image "$RUNNER_TEMP/image/debian-13-phosh.img" --suite DebianDisplayTests --single-phase --output "$RUNNER_TEMP/pair-results/display"
     - name: Grow and reboot the selected disk with this application
       if: ${{ !cancelled() && steps.products.outcome == 'success' }}
       run: |
         rm -f "$RUNNER_TEMP/app/Products/selected.xctestrun"
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/pair-state.json" --products "$RUNNER_TEMP/app/Products" --image "$RUNNER_TEMP/image/debian-13-phosh.img" --suite DebianStorageTests --storage --output "$RUNNER_TEMP/pair-results/storage"
-    - name: Require all six actual guest tests for this pair
+    - name: Require all seven actual guest tests for this pair
       run: |
         python3 - <<'PYTHON'
         import json, os
         from pathlib import Path
         root = Path(os.environ['RUNNER_TEMP']) / 'pair-results'
         results = {str(path.relative_to(root)): json.loads(path.read_text()) for path in root.glob('*/*-summary.json')}
-        assert len(results) == 6, results
+        assert len(results) == 7, results
         for summary in results.values():
             assert summary['totalTestCount'] == summary['passedTests'] == 1
             assert summary['failedTests'] == summary['skippedTests'] == 0
         (root / 'qualification.json').write_text(json.dumps(dict(app_run=os.environ['APP_RUN'],image_artifact=os.environ['IMAGE_ARTIFACT'],tests=results), indent=2) + '\n')
-        print('ACTUAL_PAIR_TESTS: 6 passed; zero failed or skipped')
+        print('ACTUAL_PAIR_TESTS: 7 passed; zero failed or skipped')
         PYTHON
     - uses: actions/upload-artifact@v4
       if: always()
