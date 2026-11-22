@@ -85,6 +85,25 @@ def discard_simulator(udid):
             print('Simulator cleanup:', error, flush=True)
 
 
+def application_container(udid):
+    # Read the installed container's own identity. CoreSimulator's XPC lookup
+    # can stall while a new device starts its system applications, even after
+    # installation succeeded. Ambiguous or absent metadata uses simctl.
+    root = Path.home() / 'Library/Developer/CoreSimulator/Devices' / udid / 'data/Containers/Data/Application'
+    candidates = []
+    for metadata in root.glob('*/.com.apple.mobile_container_manager.metadata.plist'):
+        try:
+            identity = plistlib.loads(metadata.read_bytes())
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            continue
+        if isinstance(identity, dict) and identity.get('MCMMetadataIdentifier') == 'com.imxieyi.Kernarium':
+            candidates.append(metadata.parent)
+    if len(candidates) == 1:
+        print('SIMULATOR_CONTAINER: unique installed application metadata matched the bundle identifier', flush=True)
+        return candidates[0]
+    return Path(capture('xcrun', 'simctl', 'get_app_container', udid, 'com.imxieyi.Kernarium', 'data'))
+
+
 def host_diagnostics(udid, output):
     output.mkdir(parents=True, exist_ok=True)
     commands = [
@@ -155,7 +174,7 @@ def main():
                         detail = termination.read().decode('utf-8', errors='replace')
                     if result.returncode != 0 and 'NSPOSIXErrorDomain, code=3' not in detail and 'not running' not in detail:
                         raise subprocess.CalledProcessError(result.returncode, result.args, output=detail)
-                container = Path(capture('xcrun', 'simctl', 'get_app_container', udid, 'com.imxieyi.Kernarium', 'data'))
+                container = application_container(udid)
                 if args.state:
                     args.state.write_text(json.dumps({'device': udid, 'host': host_key}) + '\n')
                 break
