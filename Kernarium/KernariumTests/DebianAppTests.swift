@@ -50,31 +50,56 @@ struct DebianAppTests {
 
     @Test
     func nativeSelectionCopiesPartOfALineAndMultipleLinesIntoAnIOSField() async throws {
+        final class SelectionContainer: UIViewController {
+            var appeared = false
+            override var shouldAutomaticallyForwardAppearanceMethods: Bool { false }
+            override func viewDidAppear(_ animated: Bool) {
+                super.viewDidAppear(animated)
+                appeared = true
+            }
+        }
         let scene = try windowScene()
+        let originalWindow = scene.keyWindow
+        let originalClipboard = UIPasteboard.general.string
         let window = UIWindow(windowScene: scene)
-        let root = UIViewController()
+        let root = SelectionContainer()
         window.rootViewController = root
         window.makeKeyAndVisible()
-        defer { window.isHidden = true }
+        defer {
+            window.isHidden = true
+            originalWindow?.makeKey()
+            UIPasteboard.general.string = originalClipboard
+        }
+        try #require(try await eventually(within: .seconds(30)) { root.appeared && window.isKeyWindow })
+        window.layoutIfNeeded()
         let contents = "prefix КИРИЛЛИЦА suffix\nsecond 'quoted' line\nthird \"quoted\" line\n"
         for selected in ["КИРИЛЛИЦА", "second 'quoted' line\nthird \"quoted\" line"] {
             let range = (contents as NSString).range(of: selected)
             let selection = ConsoleTextSelectionController(text: contents, range: range)
             root.addChild(selection)
+            selection.beginAppearanceTransition(true, animated: false)
             root.view.addSubview(selection.view)
             selection.view.frame = root.view.bounds
             selection.didMove(toParent: root)
+            root.view.layoutIfNeeded()
+            selection.endAppearanceTransition()
+            try #require(try await eventually { selection.textView.isFirstResponder })
             selection.textView.selectedRange = range
             selection.copySelection()
+            try #require(UIPasteboard.general.string == selected, "Native copy did not preserve the selected fragment")
             let field = UITextView(frame: CGRect(x: 0, y: 0, width: 300, height: 150))
             root.view.addSubview(field)
-            _ = field.becomeFirstResponder()
+            try #require(field.becomeFirstResponder())
+            try #require(try await eventually { field.isFirstResponder })
             field.paste(nil)
-            try #require(try await eventually { field.text == selected })
+            try #require(try await eventually { field.text == selected }, "Native paste returned: \(field.text ?? "nil")")
             #expect(field.text == selected)
+            field.resignFirstResponder()
             field.removeFromSuperview()
             selection.willMove(toParent: nil)
+            selection.beginAppearanceTransition(false, animated: false)
             selection.view.removeFromSuperview()
+            selection.endAppearanceTransition()
             selection.removeFromParent()
         }
     }
