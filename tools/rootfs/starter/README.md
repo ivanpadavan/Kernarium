@@ -25,8 +25,9 @@ for SSH is disabled and host keys are generated inside the guest on its first
 boot. Install your own authorized public key from the local console to use SSH.
 The local account is unlocked without an initial shared password; `ttyS0`
 (Kernarium), `hvc0` (Virtio-console hosts), and `tty1` auto-login as `debian`.
-greetd owns `tty1` during graphical boot and conflicts with its getty. Set a
-personal password with `sudo passwd debian` for the desktop lock screen.
+greetd owns `tty1` during graphical boot and conflicts with its getty. The initial
+passwordless session unlocks by swiping. After setting a personal password with
+`sudo passwd debian`, lock-screen authentication can be enabled separately.
 The producer explicitly installs GNOME session/settings components and
 Squeekboard and audits every required session desktop entry and executable.
 
@@ -35,8 +36,8 @@ with no initial password. It contains no Phosh or SSH server. Set a personal
 password with `passwd root` from the local console. The image-only CI workflow
 builds Phosh and minimal independently from a verified, cached Debian package
 base without rebuilding the kernel, IPA or boot base. Integrity-checked disks
-are available as draft assets during guest tests; publication requires real
-boot, login, persistence and shutdown checks with a prebuilt validation host.
+are available as Actions artifacts during guest tests; qualification requires
+real boot, login, persistence and shutdown checks with a prebuilt validation host.
 
 The guest session service accepts explicit clipboard transfers and serial TTY
 geometry over host-only virtio-vsock. Clipboard transfers do not send console
