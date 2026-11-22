@@ -47,12 +47,6 @@ final class FrameRelay: @unchecked Sendable {
     }
 }
 
-private let runtimeFrameSink: kernarium_runtime_frame_sink = { context, buffer in
-    guard let context, let buffer else { return }
-    let relay = Unmanaged<FrameRelay>.fromOpaque(context).takeUnretainedValue()
-    relay.receive(Unmanaged<CVPixelBuffer>.fromOpaque(buffer).takeUnretainedValue())
-}
-
 /// The window that keeps the guest running in the background: iOS shows the
 /// guest's display in a floating Picture in Picture window and keeps the
 /// process scheduled for as long as the user leaves it open.
@@ -82,7 +76,7 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
     private let synchronizer = AVSampleBufferRenderSynchronizer()
     private var receiver: AVSampleBufferVideoRenderer.Receiver?
     private var pictureInPicture: AVPictureInPictureController?
-    private var relay: FrameRelay?
+    private let frameSubscription = UUID()
     private var guestRunning = false
     private var armedRate: UInt32?
     private var starting = false
@@ -196,20 +190,8 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
 
     private func arm(rate: (width: UInt32, framesPerSecond: UInt32)) {
         if armedRate == rate.framesPerSecond { return }
-        let owner: FrameRelay
-        if let relay {
-            owner = relay
-        } else {
-            owner = FrameRelay()
-            owner.handler = { [weak self] buffer in self?.show(buffer) }
-            relay = owner
-        }
-        let result = kernarium_runtime_loader_set_frame_sink(
-            runtimeFrameSink,
-            Unmanaged.passUnretained(owner).toOpaque(),
-            rate.width,
-            rate.framesPerSecond
-        )
+        let result = GuestFrameStream.shared.subscribe(id: frameSubscription,
+            width: rate.width, fps: rate.framesPerSecond) { [weak self] buffer in self?.show(buffer) }
         if result == 0 {
             armedRate = rate.framesPerSecond
             print(
@@ -222,15 +204,14 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
     }
 
     private func disarm() {
-        guard armedRate != nil || relay != nil || pictureInPicture != nil else {
+        guard armedRate != nil || pictureInPicture != nil else {
             return
         }
         if armedRate != nil {
             // Returns only once no delivery is running, so the relay can go.
-            _ = kernarium_runtime_loader_set_frame_sink(nil, nil, 0, 0)
+            GuestFrameStream.shared.unsubscribe(id: frameSubscription)
             armedRate = nil
         }
-        relay = nil
         if let receiver {
             Task { await receiver.flush(removingDisplayedImage: true) }
         }

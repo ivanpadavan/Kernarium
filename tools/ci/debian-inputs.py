@@ -20,6 +20,7 @@ GROUPS = {
                     'tools/rootfs/starter/guest/**', 'tools/rootfs/starter/verify-debian-base.py',
                     'tools/rootfs/producer.sh'],
     'phosh': ['tools/rootfs/starter/products/debian-phosh.sh',
+              'tools/rootfs/starter/products/debian-phosh/**',
               'tools/rootfs/starter/verify-phosh.py'],
     'minimal': ['tools/rootfs/starter/products/debian-minimal.sh'],
     'image-tools': ['tools/rootfs/starter/make-gpt-image.py',

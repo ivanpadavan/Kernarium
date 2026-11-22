@@ -226,6 +226,7 @@ def main():
                 'KERNARIUM_IMAGE_FEATURES': '1' if args.features else '0',
                 'KERNARIUM_DEBIAN_SMOKE': phase if args.suite == 'PersistentDebianTests' else '',
                 'KERNARIUM_MOBILE_SMOKE': '1' if args.suite == 'DebianMobileTests' else '0',
+                'KERNARIUM_DISPLAY_SMOKE': '1' if args.suite == 'DebianDisplayTests' else '0',
                 'KERNARIUM_STORAGE_SMOKE': '1' if args.storage else '0',
                 'KERNARIUM_STORAGE_PHASE': phase,
             }
@@ -274,6 +275,8 @@ def main():
             elif args.ui_case:
                 assert counts['totalTestCount'] == 1, counts
             elif args.suite == 'DebianAppTests':
+                assert counts['totalTestCount'] == 5, counts
+            elif args.suite == 'GuestDisplayTests':
                 assert counts['totalTestCount'] == 5, counts
             elif args.suite == 'GuestJITTests':
                 assert counts['totalTestCount'] == 3, counts

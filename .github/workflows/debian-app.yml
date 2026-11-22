@@ -12,6 +12,7 @@ jobs:
     outputs:
       app: ${{ steps.plan.outputs.app }}
       runtime_tests: ${{ steps.plan.outputs.runtime_tests }}
+      phosh_key: ${{ steps.plan.outputs.phosh_key }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -28,6 +29,8 @@ jobs:
         path: plan.json
     - name: Verify product selection and cache input boundaries
       run: python3 -B tests/tooling/kernarium/test_debian_inputs.py -v
+    - name: Verify guest display geometry and metadata policy
+      run: python3 -B tests/tooling/kernarium/test_display_session.py -v
   build:
     needs: inputs
     if: needs.inputs.outputs.app == 'true'
@@ -107,7 +110,7 @@ jobs:
         path: apple-cache-*.json
         if-no-files-found: warn
   tests:
-    needs: build
+    needs: [inputs, build]
     runs-on: xcode-27
     timeout-minutes: 90
     env:
@@ -131,14 +134,23 @@ jobs:
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --suite GuestJITTests --output "$RUNNER_TEMP/jit-results"
+    - name: Display protocol, request coalescing and phone pixel restoration
+      run: |
+        rm -f .build/test-host/Products/selected.xctestrun
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --suite GuestDisplayTests --output "$RUNNER_TEMP/display-native-results"
     - name: Check modifier reset through the application's visible controls
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --ui-case KernariumUITests/testGraphicalModifiersAreReleasedWhenChangingModes --output "$RUNNER_TEMP/ui-results"
     - name: Fetch a previously boot-qualified Phosh disk without building any image
       id: golden
-      run: python3 -B tools/ci/qualified-debian-image.py --wait-seconds 1800 --output "$RUNNER_TEMP/golden-image"
+      run: python3 -B tools/ci/qualified-debian-image.py --input-key '${{ needs.inputs.outputs.phosh_key }}' --wait-seconds 1800 --output "$RUNNER_TEMP/golden-image"
+    - name: Resize the real Phosh desktop and restore the phone without reboot
+      run: |
+        rm -f .build/test-host/Products/selected.xctestrun
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianDisplayTests --single-phase --output "$RUNNER_TEMP/display-results"
     - name: Check tmux panes and status from rendered screen pixels
+      if: ${{ !cancelled() && steps.golden.outcome == 'success' }}
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianMobileTests --single-phase --output "$RUNNER_TEMP/mobile-results"
@@ -165,8 +177,8 @@ jobs:
         import json, os
         from pathlib import Path
         root=Path(os.environ['RUNNER_TEMP'])
-        tests={str(path.relative_to(root)):json.loads(path.read_text()) for folder in ('app-results','jit-results','ui-results','persistent-results','mobile-results','storage-results') for path in (root/folder).glob('*-summary.json')}
-        assert len(tests)==9, tests
+        tests={str(path.relative_to(root)):json.loads(path.read_text()) for folder in ('app-results','jit-results','ui-results','persistent-results','mobile-results','storage-results','display-native-results','display-results') for path in (root/folder).glob('*-summary.json')}
+        assert len(tests)==11, tests
         for summary in tests.values():
             assert summary['totalTestCount']>0 and summary['passedTests']==summary['totalTestCount']
             assert summary['failedTests']==summary['skippedTests']==0
@@ -189,6 +201,8 @@ jobs:
           ${{ runner.temp }}/storage-results/
 
           ${{ runner.temp }}/jit-results/
+          ${{ runner.temp }}/display-native-results/
+          ${{ runner.temp }}/display-results/
         if-no-files-found: warn
     - name: Clean up the shared test Simulator
       if: always()

@@ -59,6 +59,13 @@ class IndependentInputs(unittest.TestCase):
         self.assertFalse(result['kernel'])
         self.assertFalse(result['boot_base'])
 
+    def test_phosh_display_service_preserves_the_package_base_and_minimal(self):
+        result, first, last = self.change('tools/rootfs/starter/products/debian-phosh/kernarium-display-session.py', b'display operation')
+        self.assertEqual(result['images'], ['phosh'])
+        self.assertFalse(result['app'])
+        for key in ('debian-base', 'minimal', 'kernel', 'boot-base', 'gpu-ios-simulator'):
+            self.assertEqual(first[key], last[key], key)
+
     def test_common_package_change_selects_both_images_without_an_ipa(self):
         result, _, _ = self.change('tools/rootfs/starter/products/debian-base.sh', b'common packages plus tmux')
         self.assertEqual(result['images'], ['phosh', 'minimal'])
