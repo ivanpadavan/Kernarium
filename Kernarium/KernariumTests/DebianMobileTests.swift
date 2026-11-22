@@ -187,6 +187,11 @@ struct DebianMobileTests {
                 return text.contains(marker)
             }
             if let frame, let png = UIImage(cgImage: frame).pngData() { Attachment.record(png, named: name + ".png") }
+            if !found {
+                send("cat /tmp/kernarium-kgx.log; ps -eo pid,comm,args; journalctl --user -b -n 80 --no-pager; " +
+                     "printf 'GRAPHIC_%s_DONE\\n' diagnostics\n")
+                _ = try await eventually(within: .seconds(10)) { output.text.contains("GRAPHIC_diagnostics_DONE") }
+            }
             try #require(found, "Graphical terminal did not display \(marker): \(text)")
         }
         func key(_ code: UInt16, modifiers: [UInt16] = []) {
@@ -203,6 +208,14 @@ struct DebianMobileTests {
             // paste; clipboard transfer and key delivery are separate events.
             try await screen(ready, named: "graphical-paste-ready")
         }
+        try #require(try await eventually(within: .seconds(60)) { frame != nil })
+        // The initial Phosh session has a lock screen. Use the guest's normal
+        // touchscreen swipe instead of changing its lock policy for the test.
+        for step in 0...16 {
+            kernarium_runtime_loader_send_touch(0, 16384, UInt32(30000 - step * 1500), 1)
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        kernarium_runtime_loader_send_touch(0, 16384, 6000, 0)
         try await command("(XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus " +
                           "WAYLAND_DISPLAY=$(find /run/user/1000 -maxdepth 1 -type s -name 'wayland-*' -printf '%f\\n' | head -n 1) " +
                           "kgx -- env PS1=GRAPHIC_READY_PROMPT /bin/bash --noprofile --norc >/tmp/kernarium-kgx.log 2>&1 &); " +
