@@ -21,7 +21,9 @@ def outputs(text):
         elif output is not None:
             if line.strip() == 'Enabled: yes':
                 output['enabled'] = True
-            mode = re.match(r'\s+(\d+)x(\d+)\s+px,.*', line)
+            # wlr-randr omits the comma and Hz when a custom mode reports
+            # refresh=0; its current mode is still a valid pixel geometry.
+            mode = re.match(r'\s+(\d+)x(\d+)\s+px(?:,|\s|$)', line)
             if mode:
                 size = tuple(map(int, mode.groups()))
                 output['modes'].append(size)
@@ -49,7 +51,7 @@ def configure_display(request, command):
             command(['--output', output['name'], mode_option, f'{width}x{height}'])
         actual = next((o for o in outputs(command([])) if o['name'] == output['name']), {})
         if not actual.get('enabled') or actual.get('current') != (width, height):
-            raise RuntimeError('The compositor did not apply the requested resolution')
+            raise RuntimeError(f"The compositor did not apply {width}x{height}; current mode: {actual.get('current')}")
         return {'width': width, 'height': height, 'output': output['name']}
 
 

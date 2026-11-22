@@ -48,9 +48,17 @@ struct DebianDisplayTests {
         try #require(GuestFrameStream.shared.subscribe(id: observer, width: 4095, fps: 10) { frame = $0 } == 0)
         let context = CIContext()
         func verify(_ request: GuestDisplayRequest, name: String) async throws {
-            try #require(try await eventually(within: .seconds(150), every: .milliseconds(250)) {
+            let confirmed = try await eventually(within: .seconds(150), every: .milliseconds(250)) {
                 GuestDisplayConfiguration.shared.applied == request
-            }, "Debian did not confirm \(request): \(GuestDisplayConfiguration.shared.error ?? "pending")")
+            }
+            if !confirmed {
+                send("XDG_RUNTIME_DIR=/run/user/1000 " +
+                     "WAYLAND_DISPLAY=$(find /run/user/1000 -maxdepth 1 -type s -name 'wayland-*' -printf '%f\\n' | head -n 1) " +
+                     "wlr-randr; sudo journalctl -b -u greetd.service -u kernarium-session.service -n 100 --no-pager; " +
+                     "printf 'DISPLAY_%s_DONE\\n' diagnostics")
+                _ = try await eventually(within: .seconds(15)) { output.text.contains("DISPLAY_diagnostics_DONE") }
+            }
+            try #require(confirmed, "Debian did not confirm \(request): \(GuestDisplayConfiguration.shared.error ?? "pending")")
             try #require(try await eventually(within: .seconds(60)) {
                 guard let frame else { return false }
                 return CVPixelBufferGetWidth(frame) == request.width && CVPixelBufferGetHeight(frame) == request.height

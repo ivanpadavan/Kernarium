@@ -149,6 +149,13 @@ jobs:
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianDisplayTests --single-phase --output "$RUNNER_TEMP/display-results"
+    - name: Save display diagnostics before the remaining guest checks
+      uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() && steps.golden.outcome == 'success' }}
+      with:
+        name: ipa-display-diagnostics
+        path: ${{ runner.temp }}/display-results/
+        if-no-files-found: warn
     - name: Check tmux panes and status from rendered screen pixels
       if: ${{ !cancelled() && steps.golden.outcome == 'success' }}
       run: |
