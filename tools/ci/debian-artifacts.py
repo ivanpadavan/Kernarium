@@ -36,7 +36,7 @@ def contents(root):
 def record(root, kind, key):
     revision = os.environ.get('GITHUB_SHA') or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     result = dict(version=1, kind=kind, input_key=key, source_revision=revision,
-                  repository=os.environ.get('GITHUB_REPOSITORY', 'ivanpadavan/Kernarium'),
+                  repository=os.environ['GITHUB_REPOSITORY'],
                   producer_run=os.environ.get('GITHUB_RUN_ID'), files=contents(root))
     (root / MANIFEST).write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return result
@@ -44,7 +44,7 @@ def record(root, kind, key):
 
 def verify(root, kind=None, key=None):
     result = json.loads((root / MANIFEST).read_text())
-    if result['version'] != 1 or result['repository'] != 'ivanpadavan/Kernarium':
+    if result['version'] != 1 or result['repository'] != os.environ['GITHUB_REPOSITORY']:
         raise ValueError('Unrecognized artifact provenance')
     if not re.fullmatch('[0-9a-f]{40}', result['source_revision']):
         raise ValueError('An exact producer source revision is required')
