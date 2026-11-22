@@ -43,6 +43,7 @@ struct DebianMobileTests {
     }
 
     private func visible(_ markers: [String], in view: TerminalView, named name: String) async throws {
+        // Screen markers use letters so thin punctuation cannot become OCR whitespace.
         var lastImage: UIImage?
         var lastText = ""
         let found = try await eventually(within: .seconds(30), every: .milliseconds(250)) {
@@ -136,12 +137,12 @@ struct DebianMobileTests {
                           marker: "GRID_portrait_OK", output: output)
         // The pane markers and status are verified from Metal-rendered
         // screenshots. No tmux capture-pane output participates in this check.
-        send("tmux -V; stty -a; TERM=xterm-256color tmux -vv -L mobile new-session -s mobile 'printf \"TOP_%s\\n\" VISIBLE; exec bash'\n")
-        try await visible(["TOP_VISIBLE"], in: terminal, named: "tmux-attached")
-        try await tmuxCommand("set-option status-left-length 30; set-option status-left STATUS_VISIBLE", in: console)
-        try await visible(["STATUS_VISIBLE"], in: terminal, named: "tmux-status")
-        try await tmuxCommand("split-window -v 'printf \"BOTTOM_%s\\n\" VISIBLE; exec bash'", in: console)
-        try await visible(["TOP_VISIBLE", "BOTTOM_VISIBLE", "STATUS_VISIBLE"], in: terminal, named: "tmux-portrait")
+        send("tmux -V; stty -a; TERM=xterm-256color tmux -vv -L mobile new-session -s mobile 'printf \"TOP%s\\n\" VISIBLE; exec bash'\n")
+        try await visible(["TOPVISIBLE"], in: terminal, named: "tmux-attached")
+        try await tmuxCommand("set-option status-left-length 30; set-option status-left STATUSVISIBLE", in: console)
+        try await visible(["STATUSVISIBLE"], in: terminal, named: "tmux-status")
+        try await tmuxCommand("split-window -v 'printf \"BOTTOM%s\\n\" VISIBLE; exec bash'", in: console)
+        try await visible(["TOPVISIBLE", "BOTTOMVISIBLE", "STATUSVISIBLE"], in: terminal, named: "tmux-portrait")
         terminal.frame = CGRect(x: 0, y: 0, width: 700, height: 260)
         window.frame = terminal.frame
         window.layoutIfNeeded()
@@ -150,7 +151,7 @@ struct DebianMobileTests {
         })
         let rows = GuestTerminalGeometry.shared.rows
         let columns = GuestTerminalGeometry.shared.columns
-        try await visible(["TOP_VISIBLE", "BOTTOM_VISIBLE", "STATUS_VISIBLE"], in: terminal, named: "tmux-landscape-keyboard")
+        try await visible(["TOPVISIBLE", "BOTTOMVISIBLE", "STATUSVISIBLE"], in: terminal, named: "tmux-landscape-keyboard")
         send("\u{02}d")
         try #require(try await eventually(within: .seconds(30)) { output.text.contains("[detached") })
         try await command("test \"$(stty size)\" = '\(rows) \(columns)' && printf 'GRID_%s_OK\\n' changed",
@@ -231,27 +232,27 @@ struct DebianMobileTests {
                           "printf 'GRAPHIC_%s_DONE\\n' swipe", marker: "GRAPHIC_swipe_DONE", output: output)
         try await command("(XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus " +
                           "WAYLAND_DISPLAY=$(find /run/user/1000 -maxdepth 1 -type s -name 'wayland-*' -printf '%f\\n' | head -n 1) " +
-                          "kgx -- env PS1=GRAPHIC_READY_PROMPT /bin/bash --noprofile --norc >/tmp/kernarium-kgx.log 2>&1 &); " +
+                          "kgx -- env PS1=GRAPHICREADY /bin/bash --noprofile --norc >/tmp/kernarium-kgx.log 2>&1 &); " +
                           "printf 'GRAPHIC_%s_STARTED\\n' terminal", marker: "GRAPHIC_terminal_STARTED", output: output)
-        try await screen("GRAPHIC_READY_PROMPT", named: "graphical-console-ready")
-        try await paste("printf 'GUI_KEY_TYPED\\n' > /home/debian/.graphical-keys", ready: "GUI_KEY_TYPED")
+        try await screen("GRAPHICREADY", named: "graphical-console-ready")
+        try await paste("printf 'GUIKEYTYPED\\n' > /home/debian/.graphical-keys", ready: "GUIKEYTYPED")
         try await command("test ! -e /home/debian/.graphical-keys && printf 'GRAPHIC_%s_OK\\n' notexecuted",
                           marker: "GRAPHIC_notexecuted_OK", output: output)
         key(28)
-        try await command("test \"$(cat /home/debian/.graphical-keys)\" = GUI_KEY_TYPED && printf 'GRAPHIC_%s_OK\\n' pasted",
+        try await command("test \"$(cat /home/debian/.graphical-keys)\" = GUIKEYTYPED && printf 'GRAPHIC_%s_OK\\n' pasted",
                           marker: "GRAPHIC_pasted_OK", output: output)
-        try await paste("tmux -L graphical new-session -s graphical 'printf \"GRAPHIC_%s_READY\\n\" TMUX; exec bash'", ready: "TMUX")
+        try await paste("tmux -L graphical new-session -s graphical 'printf \"GRAPHIC%sREADY\\n\" TMUX; exec bash'", ready: "TMUX")
         key(28)
-        try await screen("GRAPHIC_TMUX_READY", named: "graphical-tmux-ready")
+        try await screen("GRAPHICTMUXREADY", named: "graphical-tmux-ready")
         key(48, modifiers: [29]) // Ctrl+B
         key(46) // c: a new tmux window
         try #require(try await eventually(within: .seconds(30), every: .seconds(1)) {
             send("test \"$(tmux -L graphical list-windows -F '#{window_index}' | wc -l)\" -eq 2 && printf 'GRAPHIC_%s_OK\\n' prefix\n")
             return output.text.contains("GRAPHIC_prefix_OK")
         })
-        try await paste("printf 'GRAPHIC_PREFIX_%s\\n' OK", ready: "GRAPHIC_PREFIX")
+        try await paste("printf 'GRAPHICPREFIX%s\\n' OK", ready: "GRAPHICPREFIX")
         key(28)
-        try await screen("GRAPHIC_PREFIX_OK", named: "graphical-tmux-prefix")
+        try await screen("GRAPHICPREFIXOK", named: "graphical-tmux-prefix")
         send("tmux -L graphical kill-server; cat /tmp/kernarium-kgx.log; " +
              "gdbus call --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 " +
              "--method org.freedesktop.DBus.Properties.Get sm.puri.OSK0 Visible\n")

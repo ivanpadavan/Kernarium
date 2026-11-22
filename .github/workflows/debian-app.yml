@@ -142,6 +142,13 @@ jobs:
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianMobileTests --single-phase --output "$RUNNER_TEMP/mobile-results"
+    - name: Save graphical and tmux diagnostics before the remaining guest checks
+      uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() && steps.golden.outcome == 'success' }}
+      with:
+        name: ipa-mobile-diagnostics
+        path: ${{ runner.temp }}/mobile-results/
+        if-no-files-found: warn
     - name: Preserve the original real Phosh-to-console persistence smoke
       if: ${{ !cancelled() && steps.golden.outcome == 'success' }}
       run: |
