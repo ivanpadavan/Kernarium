@@ -610,7 +610,7 @@ boot-qualified image, while [`Debian IMG`](../.github/workflows/debian-phosh-ima
 uses a qualified prebuilt validation host. Source-input identities select the
 affected products and verify cached artifacts. Each product saves checked
 Actions artifacts before its longer tests and records qualification only after
-its own required checks pass. The manual
+its own required checks pass. The manual and reusable
 [`compatibility workflow`](../.github/workflows/debian-compatibility.yml)
 tests chosen existing artifacts without rebuilding either product, using the
 IPA's matching Simulator host. Device runtime and finger-gesture validation on

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Verify the selected existing Debian products
+on:
+  push:
+    branches: [debian-phosh]
+    paths: [.github/workflows/debian-pair-check.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  selected-pair:
+    uses: ./.github/workflows/debian-compatibility.yml
+    with:
+      app_run_id: '44968237813'
+      image_artifact_id: '14732904465'
