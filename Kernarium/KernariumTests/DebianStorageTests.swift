@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import Foundation
+import CryptoKit
 import Testing
 @testable import Kernarium
 
@@ -12,6 +13,16 @@ struct DebianStorageTests {
     @MainActor private final class Output {
         var text = ""
         func append(_ data: Data) { text += String(decoding: data, as: UTF8.self) }
+    }
+
+    private func digest(_ image: URL) throws -> [UInt8] {
+        let file = try FileHandle(forReadingFrom: image)
+        defer { try? file.close() }
+        var hash = SHA256()
+        while let block = try file.read(upToCount: 1024 * 1024), !block.isEmpty {
+            hash.update(data: block)
+        }
+        return Array(hash.finalize())
     }
 
     @Test(.enabled(if: DebianStorageTests.requested), .timeLimit(.minutes(15)))
@@ -60,7 +71,17 @@ struct DebianStorageTests {
             #expect(DiskGrowthSettings.pending(filename: "debian-13-phosh.img") == nil)
         } else {
             let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let capacity = try PersistentDisk.capacity(documents.appendingPathComponent("debian-13-phosh.img"))
+            let image = documents.appendingPathComponent("debian-13-phosh.img")
+            let capacity = try PersistentDisk.capacity(image)
+            let original = try digest(image)
+            // A non-sector-aligned end cannot pass GPT verification after
+            // staging and truncating the copy. The real disk must stay intact.
+            #expect(throws: (any Error).self) {
+                try PersistentDisk.grow(image, to: capacity + PersistentDisk.gib + 1)
+            }
+            #expect(try PersistentDisk.capacity(image) == capacity)
+            #expect(try digest(image) == original)
+            print("STORAGE_PROOF: rejected GPT growth preserved every original byte; the next two phases must boot this disk")
             DiskGrowthSettings.schedule(bytes: (capacity / PersistentDisk.gib + 2) * PersistentDisk.gib,
                                         filename: "debian-13-phosh.img")
         }

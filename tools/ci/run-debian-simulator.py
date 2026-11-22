@@ -22,12 +22,12 @@ def run(*command, timeout=120, **kwargs):
         print('HOST_COMMAND_SECONDS:', round(time.monotonic() - started, 2), flush=True)
 
 
-def capture(*command):
+def capture(*command, timeout=60):
     # A service spawned by an Apple command may inherit its output handle.
     # A regular file does not make command completion wait for pipe EOF.
     with tempfile.TemporaryFile() as output:
         try:
-            run(*command, stdout=output, timeout=60)
+            run(*command, stdout=output, timeout=timeout)
         except subprocess.SubprocessError:
             output.seek(0)
             print('Command output before failure:', output.read().decode('utf-8', errors='replace'), flush=True)
@@ -260,7 +260,9 @@ def main():
                     process.kill()
                     process.wait(timeout=30)
                     raise
-            summary = json.loads(capture('xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result)))
+            # Cold result-tool startup can outlast ordinary simctl queries.
+            summary = json.loads(capture('xcrun', 'xcresulttool', 'get', 'test-results', 'summary',
+                                         '--path', str(result), timeout=180))
             (output / (phase + '-summary.json')).write_text(json.dumps(summary, indent=2) + '\n')
             counts = {k: summary.get(k) for k in ('totalTestCount', 'passedTests', 'failedTests', 'skippedTests')}
             print('ACTUAL_TEST_COUNTS:', phase, counts, flush=True)
