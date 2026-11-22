@@ -72,11 +72,28 @@ struct DebianMobileTests {
         try #require(try await eventually(within: .seconds(30)) {
             promptVisible()
         }, "Ctrl+B did not open the tmux command prompt")
-        // tmux reads a raw TTY: Return is CR, while LF is the distinct C-j
-        // key. A canonical shell accepts LF, but tmux's prompt does not.
-        send(text + "\r")
-        try #require(try await eventually(within: .seconds(30)) { !promptVisible() },
-                     "tmux did not finish its command prompt")
+        send(text)
+        try #require(try await eventually(within: .seconds(30)) {
+            (console.session.readViewportText() ?? "").contains(String(text.suffix(20)))
+        }, "tmux did not render the end of its command")
+        send("\r")
+        let accepted = try await eventually(within: .seconds(30)) { !promptVisible() }
+        if !accepted {
+            Attachment.record(Data((console.session.readViewportText() ?? "").utf8), named: "tmux-prompt.txt")
+            send("\u{1b}")
+            _ = try await eventually(within: .seconds(3)) { !promptVisible() }
+            send("\u{02}d")
+            let detached = try await eventually(within: .seconds(3)) {
+                (console.session.readViewportText() ?? "").contains("[detached")
+            }
+            if detached {
+                send("stty -a; tail -n 120 tmux-*.log; printf 'TMUX_%s_DONE\\n' DIAGNOSTICS\n")
+                _ = try await eventually(within: .seconds(3)) {
+                    (console.session.readViewportText() ?? "").contains("TMUX_DIAGNOSTICS_DONE")
+                }
+            }
+        }
+        try #require(accepted, "tmux did not finish its command prompt after a separate Return key")
     }
 
     @Test(.enabled(if: DebianMobileTests.requested), .timeLimit(.minutes(15)))
@@ -119,7 +136,7 @@ struct DebianMobileTests {
                           marker: "GRID_portrait_OK", output: output)
         // The pane markers and status are verified from Metal-rendered
         // screenshots. No tmux capture-pane output participates in this check.
-        send("TERM=xterm-256color tmux -L mobile new-session -s mobile 'printf \"TOP_%s\\n\" VISIBLE; exec bash'\n")
+        send("tmux -V; stty -a; TERM=xterm-256color tmux -vv -L mobile new-session -s mobile 'printf \"TOP_%s\\n\" VISIBLE; exec bash'\n")
         try await visible(["TOP_VISIBLE"], in: terminal, named: "tmux-attached")
         try await tmuxCommand("set-option status-left-length 30; set-option status-left STATUS_VISIBLE", in: console)
         try await visible(["STATUS_VISIBLE"], in: terminal, named: "tmux-status")
