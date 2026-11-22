@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Run prebuilt Simulator tests, retaining real test counts and boot diagnostics."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,12 @@ import time
 
 
 def run(*command, timeout=120, **kwargs):
-    return subprocess.run(command, check=True, timeout=timeout, stdin=subprocess.DEVNULL, **kwargs)
+    started = time.monotonic()
+    print('HOST_COMMAND:', command, 'deadline:', timeout, flush=True)
+    try:
+        return subprocess.run(command, check=True, timeout=timeout, stdin=subprocess.DEVNULL, **kwargs)
+    finally:
+        print('HOST_COMMAND_SECONDS:', round(time.monotonic() - started, 2), flush=True)
 
 
 def capture(*command):
@@ -52,6 +58,7 @@ def create_simulator(family):
                 raise RuntimeError('Simulator selection exceeded its deadline')
             result = subprocess.run(['xcrun', 'simctl', 'create', 'Debian validation', model['identifier'], runtime['identifier']], text=True, capture_output=True, timeout=30)
             if result.returncode == 0:
+                print('SIMULATOR_MODEL:', model['name'], runtime['name'], flush=True)
                 return result.stdout.strip()
     raise RuntimeError('No installed compatible iOS 27 Simulator')
 
@@ -68,6 +75,34 @@ def patch_targets(value, environment):
     elif isinstance(value, list):
         for child in value:
             patch_targets(child, environment)
+
+
+def discard_simulator(udid):
+    for operation in ('shutdown', 'delete'):
+        try:
+            subprocess.run(['xcrun', 'simctl', operation, udid], timeout=30, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as error:
+            print('Simulator cleanup:', error, flush=True)
+
+
+def host_diagnostics(udid, output):
+    output.mkdir(parents=True, exist_ok=True)
+    commands = [
+        (['ps', '-axo', 'pid,ppid,state,pcpu,pmem,comm'], 'processes.log'),
+        (['xcrun', 'simctl', 'list', 'devices', '--json'], 'simulators.json'),
+        (['log', 'show', '--last', '3m', '--style', 'compact', '--predicate',
+          'subsystem CONTAINS "CoreSimulator" OR process == "installd"'], 'simulator-host.log'),
+    ]
+    for command, name in commands:
+        try:
+            with (output / name).open('w') as log:
+                subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=30, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as error:
+            print('Diagnostic collection:', error, flush=True)
+    try:
+        run('xcrun', 'simctl', 'io', udid, 'screenshot', str(output / 'screen.png'), timeout=30)
+    except (OSError, subprocess.SubprocessError) as error:
+        print('Diagnostic collection:', error, flush=True)
 
 
 def main():
@@ -88,8 +123,7 @@ def main():
     if args.cleanup:
         if args.state and args.state.exists():
             udid = json.loads(args.state.read_text())['device']
-            subprocess.run(['xcrun', 'simctl', 'shutdown', udid], timeout=60)
-            subprocess.run(['xcrun', 'simctl', 'delete', udid], check=True, timeout=60)
+            discard_simulator(udid)
             args.state.unlink()
         return
     products = args.products.resolve()
@@ -102,12 +136,44 @@ def main():
     container = None
     failed = False
     try:
-        if not reused:
-            run('xcrun', 'simctl', 'boot', udid)
-        run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
         app = products / 'Release-iphonesimulator/Kernarium.app'
-        run('xcrun', 'simctl', 'install', udid, str(app), timeout=300)
-        container = Path(capture('xcrun', 'simctl', 'get_app_container', udid, 'com.imxieyi.Kernarium', 'data'))
+        provenance = products / 'provenance.json'
+        host_key = hashlib.sha256(provenance.read_bytes()).hexdigest() if provenance.exists() else None
+        for attempt in range(2):
+            try:
+                run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
+                installed = json.loads(args.state.read_text()).get('host') if reused and args.state else None
+                if not host_key or installed != host_key:
+                    run('xcrun', 'simctl', 'install', udid, str(app), timeout=300)
+                else:
+                    print('SIMULATOR_HOST_REUSE: the same verified application is already installed', flush=True)
+                    with tempfile.TemporaryFile() as termination:
+                        result = subprocess.run(['xcrun', 'simctl', 'terminate', udid, 'com.imxieyi.Kernarium'],
+                                                stdout=termination, stderr=subprocess.STDOUT, timeout=60,
+                                                stdin=subprocess.DEVNULL)
+                        termination.seek(0)
+                        detail = termination.read().decode('utf-8', errors='replace')
+                    if result.returncode != 0 and 'NSPOSIXErrorDomain, code=3' not in detail and 'not running' not in detail:
+                        raise subprocess.CalledProcessError(result.returncode, result.args, output=detail)
+                container = Path(capture('xcrun', 'simctl', 'get_app_container', udid, 'com.imxieyi.Kernarium', 'data'))
+                if args.state:
+                    args.state.write_text(json.dumps({'device': udid, 'host': host_key}) + '\n')
+                break
+            except (OSError, subprocess.SubprocessError) as error:
+                # A cold Simulator can stall before its installation service
+                # is ready. This retry precedes disk staging and every test.
+                # A test failure below is never retried.
+                diagnostic = output / ('setup-attempt-' + str(attempt + 1))
+                diagnostic.mkdir(parents=True, exist_ok=True)
+                (diagnostic / 'error.txt').write_text(repr(error) + '\n')
+                host_diagnostics(udid, diagnostic)
+                if attempt == 1:
+                    raise
+                discard_simulator(udid)
+                udid = create_simulator(args.family)
+                reused = False
+                if args.state:
+                    args.state.write_text(json.dumps({'device': udid}) + '\n')
         documents = container / 'Documents'
         documents.mkdir(exist_ok=True)
         if args.image:
@@ -201,17 +267,14 @@ def main():
                 if log.exists():
                     shutil.copyfile(log, output / 'application-boot.log')
             if failed:
-                with (output / 'simulator-host.log').open('w') as log:
-                    subprocess.run(['log', 'show', '--last', '3m', '--style', 'compact', '--predicate',
-                                    'subsystem CONTAINS "CoreSimulator" OR process == "installd"'],
-                                   stdout=log, stderr=subprocess.STDOUT, timeout=45)
-            subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', str(output / 'screen.png')], timeout=30)
+                host_diagnostics(udid, output)
+            else:
+                run('xcrun', 'simctl', 'io', udid, 'screenshot', str(output / 'screen.png'), timeout=30)
         except (OSError, subprocess.SubprocessError) as error:
             print('Diagnostic collection:', error, flush=True)
         finally:
             if not args.state:
-                subprocess.run(['xcrun', 'simctl', 'shutdown', udid], timeout=60)
-                subprocess.run(['xcrun', 'simctl', 'delete', udid], timeout=60)
+                discard_simulator(udid)
 
 
 if __name__ == '__main__':
