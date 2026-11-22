@@ -45,6 +45,9 @@ def main() -> None:
     keyboard_enabled = guest('runuser', '-u', 'debian', '--', 'gsettings', 'get',
                              'org.gnome.desktop.a11y.applications', 'screen-keyboard-enabled')
     assert keyboard_enabled == 'true', 'The desktop must request its on-screen keyboard automatically'
+    require_unlock = guest('runuser', '-u', 'debian', '--', 'gsettings', 'get',
+                           'sm.puri.phosh.lockscreen', 'require-unlock')
+    assert require_unlock == 'false', 'The initial passwordless session must unlock by swiping'
     terminal_id = 'org.gnome.Console.desktop'
     favorites = guest('runuser', '-u', 'debian', '--', 'gsettings', 'get',
                       'org.gnome.shell', 'favorite-apps')
@@ -88,6 +91,7 @@ def main() -> None:
     report = {'required_components': entries, 'local_account': 'debian, unlocked, no initial password',
               'console_autologin': ['ttyS0', 'hvc0', 'tty1'], 'ssh': 'owner keys only',
               'default_terminal': terminal_id, 'automatic_keyboard_requests': True, 'svg_icons': True,
+              'initial_unlock': 'swipe without a password',
               'boot_tests': 'pending'}
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

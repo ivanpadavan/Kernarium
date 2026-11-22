@@ -135,6 +135,10 @@ sources=[('xkb', 'us'), ('xkb', 'ru')]
 
 [org/gnome/desktop/a11y/applications]
 screen-keyboard-enabled=true
+
+[sm/puri/phosh/lockscreen]
+# The initial account has no password; Phosh refuses an empty unlock entry.
+require-unlock=false
 EOF
 	as_root chroot "$root" dconf update
 }
