@@ -159,8 +159,10 @@ def main():
         provenance = products / 'provenance.json'
         host_key = hashlib.sha256(provenance.read_bytes()).hexdigest() if provenance.exists() else None
         for attempt in range(2):
+            booted = False
             try:
                 run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
+                booted = True
                 installed = json.loads(args.state.read_text()).get('host') if reused and args.state else None
                 if not host_key or installed != host_key:
                     run('xcrun', 'simctl', 'install', udid, str(app), timeout=300)
@@ -180,16 +182,20 @@ def main():
                 break
             except (OSError, subprocess.SubprocessError) as error:
                 # A cold Simulator can stall before its installation service
-                # is ready. This retry precedes disk staging and every test.
-                # A test failure below is never retried.
+                # is ready. Keep a successfully booted device warm for the
+                # bounded setup retry; replacing it starts its system-app
+                # installation again. No guest test has run at this point.
                 diagnostic = output / ('setup-attempt-' + str(attempt + 1))
                 diagnostic.mkdir(parents=True, exist_ok=True)
                 (diagnostic / 'error.txt').write_text(repr(error) + '\n')
                 host_diagnostics(udid, diagnostic)
                 if attempt == 1:
                     raise
-                discard_simulator(udid)
-                udid = create_simulator(args.family)
+                if not booted:
+                    discard_simulator(udid)
+                    udid = create_simulator(args.family)
+                else:
+                    print('SIMULATOR_SETUP_REUSE: retry installation on the booted device', flush=True)
                 reused = False
                 if args.state:
                     args.state.write_text(json.dumps({'device': udid}) + '\n')

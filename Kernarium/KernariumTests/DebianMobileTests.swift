@@ -209,13 +209,26 @@ struct DebianMobileTests {
             try await screen(ready, named: "graphical-paste-ready")
         }
         try #require(try await eventually(within: .seconds(60)) { frame != nil })
+        // A first compositor frame can precede the completed GNOME session.
+        // Wait for its target and screen-lock service before sending a gesture.
+        try #require(try await eventually(within: .seconds(120), every: .seconds(2)) {
+            send("XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active --quiet graphical-session.target && " +
+                 "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus " +
+                 "gdbus call --session --dest org.gnome.ScreenSaver --object-path /org/gnome/ScreenSaver " +
+                 "--method org.gnome.ScreenSaver.GetActive && printf 'GRAPHIC_%s_READY\\n' session\n")
+            return output.text.contains("GRAPHIC_session_READY")
+        }, "The graphical session did not finish starting")
         // The initial Phosh session has a lock screen. Use the guest's normal
         // touchscreen swipe instead of changing its lock policy for the test.
-        for step in 0...16 {
-            kernarium_runtime_loader_send_touch(0, 16384, UInt32(30000 - step * 1500), 1)
-            try await Task.sleep(for: .milliseconds(25))
+        for step in 0...28 {
+            kernarium_runtime_loader_send_touch(0, 16384, UInt32(32000 - step * 1000), 1)
+            try await Task.sleep(for: .milliseconds(50))
         }
-        kernarium_runtime_loader_send_touch(0, 16384, 6000, 0)
+        kernarium_runtime_loader_send_touch(0, 16384, 4000, 0)
+        try await command("loginctl list-sessions --no-legend; " +
+                          "session=$(loginctl show-user debian -p Display --value); " +
+                          "test -z \"$session\" || loginctl show-session \"$session\" -p Type -p LockedHint; " +
+                          "printf 'GRAPHIC_%s_DONE\\n' swipe", marker: "GRAPHIC_swipe_DONE", output: output)
         try await command("(XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus " +
                           "WAYLAND_DISPLAY=$(find /run/user/1000 -maxdepth 1 -type s -name 'wayland-*' -printf '%f\\n' | head -n 1) " +
                           "kgx -- env PS1=GRAPHIC_READY_PROMPT /bin/bash --noprofile --norc >/tmp/kernarium-kgx.log 2>&1 &); " +
