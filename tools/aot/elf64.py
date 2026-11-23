@@ -44,6 +44,44 @@ class Function:
     end: int
 
 
+class ExecutableWindow:
+    """A page-aligned part of one ELF text segment, preserving virtual addresses.
+
+    Function boundaries may be split: the AOT exit at a window boundary leaves
+    canonical guest state, just as a branch between two libraries does.
+    """
+
+    def __init__(self, elf: Elf, begin: int, end: int, whole_text: bool = False) -> None:
+        segment = elf.executable_segment()
+        if begin % 4096 or end % 4096 or begin >= end:
+            raise ElfError("invalid executable window")
+        if begin < segment.vaddr or end > ((segment.vaddr + segment.filesz + 4095) & ~4095):
+            raise ElfError("window outside executable segment")
+        self.elf = elf
+        self.whole_text = whole_text
+        self.segment = Segment(begin, segment.offset + begin - segment.vaddr,
+                               min(end, segment.vaddr + segment.filesz) - begin,
+                               end - begin, segment.flags)
+
+    def __getattr__(self, name):
+        return getattr(self.elf, name)
+
+    def executable_segment(self) -> Segment:
+        return self.segment
+
+    def functions(self) -> list[Function]:
+        begin = self.segment.vaddr
+        end = begin + self.segment.filesz
+        if self.whole_text:
+            # V8's embedded interpreter builtins are executable text without
+            # unwind function ranges. Every aligned word can be entered only
+            # after its original guest page passes the normal SHA-256 check.
+            return [Function(at, min(at + 4096, end))
+                    for at in range(begin, end, 4096)]
+        return [Function(max(begin, f.start), min(end, f.end))
+                for f in self.elf.functions() if f.start < end and f.end > begin]
+
+
 class Elf:
     def __init__(self, data: bytes) -> None:
         self.data = data

@@ -48,7 +48,8 @@
 # runtime links it and none for one whose runtime does not, so the framework
 # is in the application exactly when its runtime needs it. Which runtime links
 # it is the runtime tree's own configuration (UML_AOT_MODE, UML_AOT_ARTIFACT);
-# the Linux runtime never does. An archive of Andarium's Release configuration
+# an explicitly selected Linux Node artifact can supply the Linux runtime.
+# An archive of Andarium's Release configuration
 # embeds it only while the accepted AOT descriptor allows it
 # (scripts/check-embedded-artifacts.py --aot).
 #
@@ -272,7 +273,10 @@ if has_sdk device; then
 		[ -d "$DEVICE_AOT" ] || fail "missing framework slice: $DEVICE_AOT"
 	fi
 	if [ "$RUNTIMES" != android ] && links_aot "$DEVICE_RUNTIME_4K/$RUNTIME_4K"; then
-		fail "$RUNTIME_4K links the ahead-of-time framework, which only the Android runtime may"
+		[ "$RUNTIMES" = linux ] || fail "package Linux Node AOT with --runtimes linux"
+		AOT_DEVICE=1
+		DEVICE_AOT="$ROOT_DIR/.build/$RUNTIME_TREE/lib/$AOT_FRAMEWORK.framework"
+		[ -d "$DEVICE_AOT" ] || fail "missing Linux Node AOT device framework"
 	fi
 fi
 if has_sdk simulator; then
@@ -281,7 +285,10 @@ if has_sdk simulator; then
 		[ -d "$SIMULATOR_AOT" ] || fail "missing framework slice: $SIMULATOR_AOT"
 	fi
 	if [ "$RUNTIMES" != android ] && links_aot "$SIMULATOR_RUNTIME_4K/$RUNTIME_4K"; then
-		fail "$RUNTIME_4K links the ahead-of-time framework, which only the Android runtime may"
+		[ "$RUNTIMES" = linux ] || fail "package Linux Node AOT with --runtimes linux"
+		AOT_SIMULATOR=1
+		SIMULATOR_AOT="$ROOT_DIR/.build/$SIMULATOR_RUNTIME_TREE/lib/$AOT_FRAMEWORK.framework"
+		[ -d "$SIMULATOR_AOT" ] || fail "missing Linux Node AOT Simulator framework"
 	fi
 fi
 AOT_FRAMEWORKS=

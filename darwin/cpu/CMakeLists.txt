@@ -76,6 +76,12 @@ set(UML_AOT_ARTIFACT "" CACHE PATH
 if(NOT UML_AOT_MODE MATCHES "^(AUTO|ON|OFF)$")
     message(FATAL_ERROR "UML_AOT_MODE must be AUTO, ON or OFF")
 endif()
+set(UML_LINUX_NODE_AOT_ARTIFACT "" CACHE PATH
+    "The fixed Linux Node AOT experiment artifact; empty leaves Linux unchanged")
+if(UML_LINUX_NODE_AOT_ARTIFACT AND
+   (UML_AOT_IMAGE OR UML_AOT_ARTIFACT OR UML_KERNEL_PRODUCT STREQUAL "android-17"))
+    message(FATAL_ERROR "Linux Node AOT cannot share an Android AOT build")
+endif()
 set(UML_AOT OFF)
 set(UML_AOT_SOURCE "")
 set(UML_AOT_ARTIFACT_DIR "")
@@ -86,6 +92,9 @@ if(UML_AOT_MODE STREQUAL "OFF")
     if(UML_AOT_IMAGE OR UML_AOT_ARTIFACT)
         message(STATUS "UML_AOT_MODE=OFF: building without the AOT component")
     endif()
+elseif(UML_LINUX_NODE_AOT_ARTIFACT)
+    set(UML_AOT_SOURCE artifact)
+    set(UML_AOT_ARTIFACT_DIR "${UML_LINUX_NODE_AOT_ARTIFACT}")
 elseif(UML_AOT_IMAGE AND UML_AOT_ARTIFACT)
     message(FATAL_ERROR
         "UML_AOT_IMAGE and UML_AOT_ARTIFACT name two blobs; name one")
@@ -137,6 +146,11 @@ if(UML_AOT_SOURCE STREQUAL "artifact")
         ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/tools/aot/release_artifact.py verify
         --artifact "${UML_AOT_ARTIFACT_DIR}")
+    if(UML_LINUX_NODE_AOT_ARTIFACT)
+        set(_uml_aot_verify_command ${Python3_EXECUTABLE} -B
+            ${PROJECT_SOURCE_DIR}/tools/aot/linux_node.py verify
+            --output "${UML_AOT_ARTIFACT_DIR}")
+    endif()
     if(UML_AOT_ARTIFACT_ACCEPTED)
         list(APPEND _uml_aot_verify_command
             --accepted "${UML_AOT_ARTIFACT_ACCEPTED}")

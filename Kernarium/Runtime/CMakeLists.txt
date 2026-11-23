@@ -75,6 +75,15 @@ add_library(KernariumRuntime SHARED
     KernariumRuntime.mm)
 uml_declare_architecture_target(KernariumRuntime app)
 
+if(UML_LINUX_NODE_AOT_ARTIFACT)
+    file(READ "${UML_LINUX_NODE_AOT_ARTIFACT}/artifact.json" _node_aot)
+    foreach(_key release_id release_manifest_sha256 system_partition_sha256)
+        string(JSON _node_${_key} GET "${_node_aot}" release ${_key})
+    endforeach()
+    target_compile_definitions(KernariumRuntime PRIVATE
+        UML_LINUX_NODE_AOT_RELEASE="--aot-release=${_node_release_id},${_node_release_manifest_sha256},${_node_system_partition_sha256}")
+endif()
+
 # The release runtime boots only the desktop and keeps the stock ADB
 # authorization prompt. The automation runtime, which only test and benchmark
 # drivers package, differs by guest: the Linux one also accepts a host-built

@@ -251,6 +251,10 @@ else()
         release release_id)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${_uml_aot_artifact_json}")
+    if(UML_LINUX_NODE_AOT_ARTIFACT)
+        configure_file("${UML_AOT_ARTIFACT_DIR}/licences.json"
+            "${_uml_aot_fw_dir}/licences.json" COPYONLY)
+    endif()
     set(_uml_aot_verify_args --artifact "${UML_AOT_ARTIFACT_DIR}")
     if(UML_AOT_ARTIFACT_ACCEPTED)
         list(APPEND _uml_aot_verify_args
@@ -259,6 +263,10 @@ else()
     set(_uml_aot_verify
         ${Python3_EXECUTABLE} -B ${_uml_aot_tools}/release_artifact.py verify
         ${_uml_aot_verify_args})
+    if(UML_LINUX_NODE_AOT_ARTIFACT)
+        set(_uml_aot_verify ${Python3_EXECUTABLE} -B
+            ${_uml_aot_tools}/linux_node.py verify --output "${UML_AOT_ARTIFACT_DIR}")
+    endif()
     set(_uml_aot_artifact_stamp ${_uml_aot_dir}/artifact-verified.stamp)
     add_custom_command(
         OUTPUT ${_uml_aot_artifact_stamp}
@@ -269,6 +277,7 @@ else()
             ${_uml_aot_tool_sources} ${_uml_aot_tools}/release_artifact.py
             ${_uml_aot_tools}/libraries.txt ${_uml_aot_tools}/extract_image.py
             ${_uml_aot_tools}/licences.py
+            ${_uml_aot_tools}/linux_node.py ${_uml_aot_tools}/linux-node-archives.tsv
             ${PROJECT_SOURCE_DIR}/tests/unit/arm64/a64_instruction_decode_partitions.tsv
             ${PROJECT_SOURCE_DIR}/darwin/cpu/arm64/layout/assembly_offsets.h
         COMMENT "Checking the AOT artifact"
@@ -345,6 +354,7 @@ function(_uml_aot_add_runtime TARGET DIAGNOSTICS)
     target_include_directories(${TARGET} PRIVATE
         ${PROJECT_SOURCE_DIR}/darwin)
     target_compile_definitions(${TARGET} PRIVATE
+        UML_LINUX_NODE_AOT=$<BOOL:${UML_LINUX_NODE_AOT_ARTIFACT}>
         UML_AOT_DIAGNOSTICS=${DIAGNOSTICS}
         UML_MEMORY_COUNT_AUDIT=${DIAGNOSTICS}
         UML_AOT_KERNEL_STACK_BYTES=${_uml_aot_kernel_stack_bytes}

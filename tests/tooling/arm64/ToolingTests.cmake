@@ -9,6 +9,13 @@ uml_add_tooling_test(
 
 # The AOT rewriter's encoders, decoder and assembler against known words.
 uml_add_tooling_test(
+    NAME arm64-linux-node-aot-tools
+    COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/tests/tooling/arm64/test_linux_node_aot.py
+    LABELS cpu
+    TIMEOUT 60)
+
+uml_add_tooling_test(
     NAME arm64-aot-tools
     COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/tests/tooling/arm64/test_aot_tools.py

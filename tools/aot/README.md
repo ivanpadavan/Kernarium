@@ -108,3 +108,25 @@ engine.
 Licence: the tool is GPL-2.0-or-later. The libraries it rewrites keep their
 own licences, and each artifact's `licences.json` records the notice every
 library states in the image.
+
+## Fixed Linux Node experiment
+
+`linux_node.py` produces an EROFS capsule and a separate AOT artifact for the
+arm64 Node archive pinned by `linux-node-archives.tsv`. The capsule is mounted
+read-only at `/opt/kernarium-node` in the Phosh disk; `node` starts that binary
+with V8's JIT disabled. The AOT artifact covers its executable segment in
+bounded windows, including embedded V8 interpreter builtins without unwind
+tables. Unhandled instructions remain with the gadget engine.
+
+`UML_LINUX_NODE_AOT_ARTIFACT` selects this artifact for the Linux runtime.
+Apple builds verify and wrap it; only the Linux CI producer generates it.
+The compiled Linux launch states the capsule identity; each entered guest page
+still requires the kernel's EROFS immutable fact and a complete SHA-256 match.
+The first entry that retires rewritten instructions reports activation once.
+The framework carries Node's bundled licence notices.
+
+The Debian IPA workflow produces the matching IMG and unsigned device IPA,
+and boots the Simulator with AOT enabled and disabled. Both runs require
+`node --version` and the JavaScript workload to pass; only the enabled run may
+report AOT activation. This is a fixed-version experiment, not a performance
+claim or support for arbitrary Node updates.

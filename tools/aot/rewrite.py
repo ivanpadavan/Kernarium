@@ -2412,6 +2412,10 @@ def build_unit(job: tuple) -> dict:
     layout = read_layout(LAYOUT_HEADER)
     data = pathlib.Path(file_path).read_bytes()
     elf = elf64.Elf(data)
+    if len(job) >= 6:
+        elf = elf64.ExecutableWindow(elf, job[4], job[5])
+        if len(job) == 7:
+            elf.whole_text = job[6]
     library = Library(index, name, elf, decoder, layout, count_retired)
     segment = library.segment
     digests = []
@@ -2497,17 +2501,18 @@ def build_blob(units: list[dict], layout: dict[str, int],
     for unit, base in zip(units, bases):
         blob[base:base + len(unit["unit"])] = unit["unit"]
     # the global page-digest hash: digests that identify one page only
-    same: dict[str, str] = {}
+    same: dict[tuple[str, int, int], str] = {}
     for unit in units:
         # The unit binds by the content of its pages, not by its path: a
         # second copy of the same file (a library an APEX ships in several
         # places) would take every digest out of the hash, and neither would
         # ever bind. One path names the file; the guest finds every copy by
-        # its pages.
-        if unit["sha256"] in same:
+        # its pages. Non-overlapping windows of one ELF are distinct units.
+        identity = (unit["sha256"], unit["table_base"], unit["table_end"])
+        if identity in same:
             raise ValueError(f"{unit['path']} is the same file as "
-                             f"{same[unit['sha256']]}: list it once")
-        same[unit["sha256"]] = unit["path"]
+                             f"{same[identity]}: list it once")
+        same[identity] = unit["path"]
     occupancy: dict[int, int] = collections.Counter()
     for unit in units:
         occupancy.update(unit["digests"])

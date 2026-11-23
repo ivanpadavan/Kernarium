@@ -145,7 +145,7 @@ runs:
     shell: bash
     run: |
       RUNTIME_SOURCE=$(python3 -B tools/ci/debian-inputs.py --component runtime)
-      KEY=$(printf '%s\n' "$RUNTIME_SOURCE" "${{ steps.keys.outputs.gpu }}" "${{ steps.keys.outputs.network }}" "${{ steps.keys.outputs.storage }}" "${{ steps.keys.outputs.compression }}" "$CI_KERNEL_SHA256" "$CI_BOOT_BASE_SHA256" "${{ inputs.platform }}" | shasum -a 256 | awk '{print $1}')
+      KEY=$(printf '%s\n' "$RUNTIME_SOURCE" "${{ steps.keys.outputs.gpu }}" "${{ steps.keys.outputs.network }}" "${{ steps.keys.outputs.storage }}" "${{ steps.keys.outputs.compression }}" "$CI_KERNEL_SHA256" "$CI_BOOT_BASE_SHA256" "${CI_NODE_AOT_SHA256:-}" "${{ inputs.platform }}" | shasum -a 256 | awk '{print $1}')
       echo "key=$KEY" >> "$GITHUB_OUTPUT"
   - uses: actions/cache/restore@v4
     id: runtime-cache

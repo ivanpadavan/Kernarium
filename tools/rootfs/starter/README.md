@@ -64,6 +64,12 @@ A starter disk boots through the generic per-run `/init` with
 enlarged it, and a growth failure is only a warning (the mechanics are in
 [`../boot-ramdisk/init`](../boot-ramdisk/init)).
 
+The Debian IPA experiment also produces a Phosh disk containing the fixed
+Node EROFS capsule and its JavaScript acceptance workload. The image mounts
+that capsule before login, and `node` uses it without a guest installation
+step. Its paired host AOT artifact is described in
+[`tools/aot`](../../aot/README.md#fixed-linux-node-experiment).
+
 ## Building
 
 The producer runs natively on arm64 Linux and requires `sudo`, Buildroot's

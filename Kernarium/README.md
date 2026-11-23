@@ -212,6 +212,17 @@ CI records success on the image release. This does not validate installation,
 hardware Metal, memory limits, JIT or LiveContainer behavior on a physical
 iPhone.
 
+## Linux Node experiment
+
+The Debian IPA experiment carries the Linux Node AOT framework and produces a
+matching Phosh IMG with Node already available at login. A fresh experiment
+application defaults to the gadget engine, whose AOT path runs the capsule's
+rewritten code. V8's own JIT is disabled by the image's `node` wrapper.
+The artifact and page-verification contract belongs to
+[`tools/aot`](../tools/aot/README.md#fixed-linux-node-experiment).
+`DebianNodeTests` boots the IMG, checks the fixed version and runs JavaScript;
+CI repeats it with AOT disabled and checks activation separately.
+
 ## Automation runs
 
 The release runtime accepts no host payload and carries no test campaign.
