@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Linux Node windows preserve instruction addresses and immutable file bytes."""
+import io
+import os
 from pathlib import Path
+import stat
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
@@ -24,6 +28,37 @@ class Image:
 
 
 class Windows(unittest.TestCase):
+    def test_capsule_payload_is_accessible_to_guest_users_with_a_private_umask(self):
+        class CapsuleChecked(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            scratch = Path(temporary)
+            archive = scratch / 'node.tar.xz'
+            with tarfile.open(archive, 'w:xz') as destination:
+                for relative in ('bin/node', 'LICENSE'):
+                    member = tarfile.TarInfo(f'node-v{linux_node.VERSION}-linux-arm64/{relative}')
+                    member.size = len(b'fixture')
+                    destination.addfile(member, io.BytesIO(b'fixture'))
+
+            def inspect_payload(command, **kwargs):
+                root = Path(command[-1])
+                for relative in ('', 'bin', 'bin/node'):
+                    permissions = stat.S_IMODE((root / relative).stat().st_mode)
+                    self.assertEqual(permissions, 0o755, relative)
+                for relative in ('LICENSE', 'identity.json'):
+                    self.assertEqual(stat.S_IMODE((root / relative).stat().st_mode), 0o644, relative)
+                raise CapsuleChecked
+
+            previous = os.umask(0o077)
+            try:
+                with mock.patch.object(linux_node.artifact, 'sha256_file', return_value=linux_node.ARCHIVE_SHA256), \
+                        mock.patch.object(linux_node.subprocess, 'run', side_effect=inspect_payload):
+                    with self.assertRaises(CapsuleChecked):
+                        linux_node.build(archive, scratch / 'output', Path(__file__).resolve().parents[3])
+            finally:
+                os.umask(previous)
+
     def test_embedded_builtin_text_does_not_need_unwind_tables(self):
         image = Image()
         image.functions = lambda: []
