@@ -447,6 +447,14 @@ for framework in $RUNTIME_FRAMEWORKS; do
 done
 for framework in $AOT_FRAMEWORKS; do
 	install_privacy_manifest "$framework" "$framework"
+	if [ "$(uname -s)" = Darwin ]; then
+		# Stripping changes signed Mach-O pages; sign the final slice only
+		# after its binary and resources are ready for an unsigned app build.
+		for slice_framework in "$STAGE/$framework.xcframework"/*/"$framework.framework"; do
+			/usr/bin/codesign --force --sign - "$slice_framework"
+			/usr/bin/codesign --verify --strict "$slice_framework"
+		done
+	fi
 done
 for framework in $GPU_FRAMEWORKS; do
 	[ ! -d "$STAGE/$framework.xcframework" ] ||
