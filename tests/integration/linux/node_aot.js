@@ -24,6 +24,26 @@ async function main() {
     const child = spawnSync(process.execPath, ['--jitless', '--version'], {encoding: 'utf8', timeout: 30000});
     assert.equal(child.status, 0);
     assert.equal(child.stdout.trim(), process.version);
+    const identity = JSON.parse(fs.readFileSync('/opt/kernarium-node/identity.json', 'utf8'));
+    const npm = spawnSync('npm', ['--version'], {encoding: 'utf8', timeout: 30000});
+    assert.equal(npm.status, 0, `npm --version: signal=${npm.signal}\n${npm.stderr}`);
+    assert.equal(npm.stdout.trim(), identity.npm_version);
+    const npx = spawnSync('npx', ['--version'], {encoding: 'utf8', timeout: 30000});
+    assert.equal(npx.status, 0, `npx --version: signal=${npx.signal}\n${npx.stderr}`);
+    assert.equal(npx.stdout.trim(), identity.npm_version);
+    const packageDirectory = path.join(directory, 'package');
+    const project = path.join(directory, 'project');
+    fs.mkdirSync(packageDirectory);
+    fs.mkdirSync(project);
+    fs.writeFileSync(path.join(packageDirectory, 'package.json'),
+                     JSON.stringify({name: 'kernarium-npm-probe', version: '1.0.0', main: 'index.js'}));
+    fs.writeFileSync(path.join(packageDirectory, 'index.js'), 'module.exports = 42;\n');
+    fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({name: 'probe', private: true}));
+    const installed = spawnSync('npm', ['install', '--offline', '--ignore-scripts', '--no-audit',
+                               '--no-fund', '--prefix', project, packageDirectory],
+                               {encoding: 'utf8', timeout: 60000});
+    assert.equal(installed.status, 0, `npm install: signal=${installed.signal}\n${installed.stderr}`);
+    assert.equal(require(path.join(project, 'node_modules/kernarium-npm-probe')), 42);
     await new Promise(resolve => setTimeout(resolve, 5));
     console.log('NODE_AOT_WORKLOAD_OK');
   } finally {

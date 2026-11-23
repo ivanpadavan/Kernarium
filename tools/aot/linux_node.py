@@ -29,6 +29,34 @@ def encoded(value):
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
 
 
+def extract_npm(source, root):
+    prefix = f'node-v{VERSION}-linux-arm64/'
+    npm_prefix = prefix + 'lib/node_modules/npm'
+    for entry in source.getmembers():
+        if entry.name != npm_prefix and not entry.name.startswith(npm_prefix + '/'):
+            continue
+        relative = Path(entry.name[len(prefix):])
+        if relative.is_absolute() or '..' in relative.parts:
+            raise ValueError('Unsafe bundled npm path')
+        destination = root / relative
+        if entry.isdir():
+            destination.mkdir(parents=True, exist_ok=True)
+        elif entry.isfile():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with source.extractfile(entry) as stream, destination.open('wb') as target:
+                shutil.copyfileobj(stream, target)
+            destination.chmod(0o755 if entry.mode & 0o111 else 0o644)
+        else:
+            raise ValueError('Not a regular bundled npm file or directory')
+    for directory in root.rglob('*'):
+        if directory.is_dir():
+            directory.chmod(0o755)
+    package = json.loads((root / 'lib/node_modules/npm/package.json').read_text())
+    if package.get('name') != 'npm' or not isinstance(package.get('version'), str):
+        raise ValueError('Bundled npm has no package identity')
+    return package['version']
+
+
 def generator(repo):
     return {name: artifact.sha256_file(repo / name) for name in INPUTS}
 
@@ -70,8 +98,9 @@ def build(archive: Path, output: Path, repo: Path):
                 with source.extractfile(entry) as stream, destination.open('wb') as target:
                     shutil.copyfileobj(stream, target)
                 destination.chmod(0o644)
+            npm_version = extract_npm(source, root)
         node.chmod(0o755)
-        identity = dict(version=VERSION, archive_sha256=ARCHIVE_SHA256,
+        identity = dict(version=VERSION, npm_version=npm_version, archive_sha256=ARCHIVE_SHA256,
                         node_sha256=artifact.sha256_file(node))
         identity_bytes = encoded(identity)
         (root / 'identity.json').write_bytes(identity_bytes)
@@ -130,6 +159,14 @@ def install(output: Path, root: Path):
     wrapper.parent.mkdir(parents=True, exist_ok=True)
     wrapper.write_text('#!/bin/sh\nexec /opt/kernarium-node/bin/node --jitless "$@"\n')
     wrapper.chmod(0o755)
+    for tool in ('npm', 'npx'):
+        wrapper = root / 'usr/local/bin' / tool
+        wrapper.write_text('#!/bin/sh\n'
+            'if [ -z "${npm_config_prefix+x}${NPM_CONFIG_PREFIX+x}" ]; then\n'
+            '    export npm_config_prefix=/usr/local\n'
+            'fi\n'
+            f'exec {PREFIX}/bin/node --jitless {PREFIX}/lib/node_modules/npm/bin/{tool}-cli.js "$@"\n')
+        wrapper.chmod(0o755)
 
 
 def main():

@@ -112,7 +112,10 @@ library states in the image.
 ## Fixed Linux Node experiment
 
 `linux_node.py` produces an EROFS capsule and a separate AOT artifact for the
-arm64 Node archive pinned by `linux-node-archives.tsv`. The capsule is mounted
+arm64 Node archive pinned by `linux-node-archives.tsv`. It carries Node, npm
+and npx from that archive. npm's global prefix defaults to the
+writable `/usr/local`; project installs and the per-user cache use their
+ordinary npm locations. The capsule is mounted
 read-only at `/opt/kernarium-node` in the Phosh disk; `node` starts that binary
 with V8's JIT disabled. The AOT artifact covers its executable segment in
 bounded windows, including embedded V8 interpreter builtins without unwind
