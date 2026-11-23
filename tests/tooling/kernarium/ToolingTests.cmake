@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 uml_add_tooling_test(
+    NAME kernarium-xtool-packaging
+    COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/tests/tooling/kernarium/test_xtool.py
+    LABELS kernarium;package
+    TIMEOUT 60)
+
+uml_add_tooling_test(
     NAME kernarium-display-session
     COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/tests/tooling/kernarium/test_display_session.py

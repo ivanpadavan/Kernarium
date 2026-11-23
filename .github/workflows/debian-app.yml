@@ -13,6 +13,7 @@ jobs:
       app: ${{ steps.plan.outputs.app }}
       runtime_tests: ${{ steps.plan.outputs.runtime_tests }}
       phosh_key: ${{ steps.plan.outputs.phosh_key }}
+      sdk_key: ${{ steps.sdk-cache.outputs.cache-matched-key }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -31,6 +32,41 @@ jobs:
       run: python3 -B tests/tooling/kernarium/test_debian_inputs.py -v
     - name: Verify guest display geometry and metadata policy
       run: python3 -B tests/tooling/kernarium/test_display_session.py -v
+    - name: Check the xtool packaging adapter
+      run: timeout 60 python3 -B tests/tooling/kernarium/test_xtool.py
+    - uses: actions/cache/restore@v4
+      id: sdk-cache
+      with:
+        path: .build/xtool-sdk-input
+        key: xtool-sdk-v1-${{ hashFiles('tools/ci/xtool/export-sdk.py') }}-lookup
+        restore-keys: xtool-sdk-v1-${{ hashFiles('tools/ci/xtool/export-sdk.py') }}-
+        lookup-only: true
+  sdk:
+    needs: inputs
+    if: needs.inputs.outputs.app == 'true' && needs.inputs.outputs.sdk_key == ''
+    runs-on: xcode-27
+    timeout-minutes: 30
+    outputs:
+      key: ${{ steps.identity.outputs.key }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Identify the installed SDK without compiling
+      id: identity
+      run: |
+        XCODE_PATH=$(python3 -c 'import pathlib; p=sorted(pathlib.Path("/Applications").glob("Xcode_27*.app")); print(p[-1] if p else "/Applications/Xcode.app")')
+        sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+        xcodebuild -version
+        xcrun --sdk iphoneos --show-sdk-version | awk -F. '$1 >= 27 { ok=1 } END { exit !ok }'
+        SDK_ID=$(xcodebuild -version | shasum -a 256 | cut -c1-64)
+        echo "key=xtool-sdk-v1-${{ hashFiles('tools/ci/xtool/export-sdk.py') }}-$SDK_ID" >> "$GITHUB_OUTPUT"
+    - name: Copy the SDK inputs for the Linux compiler
+      run: |
+        python3 -B tools/ci/xtool/export-sdk.py --developer "$(xcode-select -p)" --output .build/xtool-sdk-input
+        python3 -B tools/ci/debian-artifacts.py record --root .build/xtool-sdk-input --kind xtool-sdk --key "${{ steps.identity.outputs.key }}"
+    - uses: actions/cache/save@v4
+      with:
+        path: .build/xtool-sdk-input
+        key: ${{ steps.identity.outputs.key }}
   node-image:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 180
@@ -72,6 +108,52 @@ jobs:
         name: node-phosh-image
         path: ${{ runner.temp }}/node-image/
         compression-level: 0
+  build-device:
+    needs: [inputs, node-image, sdk]
+    if: ${{ !cancelled() && needs.inputs.outputs.app == 'true' && needs.node-image.result == 'success' && (needs.sdk.result == 'success' || needs.sdk.result == 'skipped') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: actions/cache/restore@v4
+      with:
+        path: .build/xtool-sdk-input
+        key: ${{ needs.inputs.outputs.sdk_key || needs.sdk.outputs.key }}
+        fail-on-cache-miss: true
+    - name: Verify SDK content hashes and identity
+      run: python3 -B tools/ci/debian-artifacts.py verify --root .build/xtool-sdk-input --kind xtool-sdk --key "${{ needs.inputs.outputs.sdk_key || needs.sdk.outputs.key }}"
+    - name: Stage the accepted kernel and boot base
+      run: python3 -B tools/ci/stage-debian-runtime.py
+    - uses: actions/download-artifact@v4
+      with:
+        name: linux-node-aot
+        path: .build/linux-node-aot
+    - name: Select our Node AOT artifact
+      run: echo "KERNARIUM_NODE_AOT_ARTIFACT=$PWD/.build/linux-node-aot" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/xtool-runtime
+    - name: Cross-build the unsigned device IPA with xtool
+      run: |
+        python3 -B tools/ci/xtool/build-app.py
+        mkdir -p "$RUNNER_TEMP/ipa-release"
+        cp "$RUNNER_TEMP/Kernarium-Debian.ipa" "$RUNNER_TEMP/ipa-release/"
+        python3 -B tools/ci/debian-artifacts.py record --root "$RUNNER_TEMP/ipa-release" --kind ipa --key "$GITHUB_SHA"
+        python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/ipa-release" --kind ipa --key "$GITHUB_SHA"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: app-device
+        path: ${{ runner.temp }}/ipa-release/
+        if-no-files-found: error
+        compression-level: 0
+    - uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: xtool-build-diagnostics
+        path: Kernarium/xtool/.xtool-tmp/DerivedData/Logs/
+        if-no-files-found: warn
   build:
     needs: [inputs, node-image]
     if: needs.inputs.outputs.app == 'true'
@@ -79,10 +161,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - sdk: device
-          platform: ios
-          directory: ios-device-arm64
-          legacy: ios
         - sdk: simulator
           platform: ios-simulator
           directory: ios-simulator-arm64
@@ -105,35 +183,14 @@ jobs:
       run: |
         echo "KERNARIUM_NODE_AOT_ARTIFACT=$PWD/.build/linux-node-aot" >> "$GITHUB_ENV"
         echo "CI_NODE_AOT_SHA256=$(shasum -a 256 .build/linux-node-aot/artifact.json | awk '{print $1}')" >> "$GITHUB_ENV"
+    - name: Check framework embedding with the selected Apple tools
+      run: timeout 180 python3 -B tests/tooling/kernarium/test_device_framework_embed.py
     - uses: ./.github/actions/apple-runtime
       with:
         sdk: ${{ matrix.sdk }}
         platform: ${{ matrix.platform }}
         platform-directory: ${{ matrix.directory }}
         legacy-prefix: ${{ matrix.legacy }}
-    - name: Build unsigned device application
-      if: matrix.sdk == 'device'
-      run: |
-        xcodebuild -project Kernarium/Kernarium.xcodeproj -scheme Kernarium -configuration Release \
-          -destination 'generic/platform=iOS' -derivedDataPath "$PWD/.build/iphone-derived" -jobs 3 \
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS=KERNARIUM_NODE_AOT CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
-        mkdir -p .build/ipa/Payload
-        cp -R .build/iphone-derived/Build/Products/Release-iphoneos/Kernarium.app .build/ipa/Payload/
-        (cd .build/ipa && zip -qry "$RUNNER_TEMP/Kernarium-Debian.ipa" Payload)
-        unzip -t "$RUNNER_TEMP/Kernarium-Debian.ipa"
-        python3 - <<'PY'
-        import zipfile, os
-        from pathlib import Path
-        with zipfile.ZipFile(Path(os.environ['RUNNER_TEMP']) / 'Kernarium-Debian.ipa') as archive:
-            names = archive.namelist()
-            assert 'Payload/Kernarium.app/Kernarium' in names
-            assert any('/KRuntime_6_18_4K.framework/' in n for n in names)
-        PY
-        mkdir -p "$RUNNER_TEMP/ipa-release"
-        cp -c "$RUNNER_TEMP/Kernarium-Debian.ipa" "$RUNNER_TEMP/ipa-release/"
-        python3 -B tools/ci/debian-artifacts.py record --root "$RUNNER_TEMP/ipa-release" --kind ipa --key "$GITHUB_SHA"
-        python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/ipa-release" --kind ipa --key "$GITHUB_SHA"
-        cp -c "$RUNNER_TEMP/ipa-release/provenance.json" "$RUNNER_TEMP/provenance.json"
     - name: Build the matching Simulator test host
       if: matrix.sdk == 'simulator'
       run: |
@@ -145,11 +202,7 @@ jobs:
     - uses: actions/upload-artifact@v4
       with:
         name: app-${{ matrix.sdk }}
-        path: |
-          ${{ runner.temp }}/Kernarium-Debian.ipa
-          ${{ runner.temp }}/debian-app-test-host.tar.gz
-
-          ${{ runner.temp }}/provenance.json
+        path: ${{ runner.temp }}/debian-app-test-host.tar.gz
         if-no-files-found: error
         compression-level: 0
     - uses: actions/upload-artifact@v4
@@ -159,7 +212,7 @@ jobs:
         path: apple-cache-*.json
         if-no-files-found: warn
   tests:
-    needs: [inputs, build]
+    needs: [inputs, build, build-device]
     runs-on: xcode-27
     timeout-minutes: 90
     env:
@@ -284,6 +337,7 @@ jobs:
     needs:
     - inputs
     - build
+    - build-device
     - tests
     - jit-memory
     runs-on: ubuntu-latest
@@ -357,4 +411,5 @@ jobs:
   pull_request:
     branches:
     - debian-phosh-upstream-20261123
+    - feature/linux-node-aot
   workflow_dispatch: null

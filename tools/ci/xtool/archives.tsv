@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name	url	sha256
+xtool-aarch64.AppImage	https://github.com/xtool-org/xtool/releases/download/2.0.0-beta.1/xtool-aarch64.AppImage	0d9b46cb30b4b9b6656b8c67d92dae27fcd9d61043e18566c91ce189eb015814
+toolset-aarch64.tar.gz	https://github.com/xtool-org/darwin-tools-linux-llvm/releases/download/v1.1.0/toolset-aarch64.tar.gz	a6fc628a1db47ff6f209d32e66aec72eb77112d3f0b1ac1fcf5f6af7f34a9d08
+OpenAppleMacrosServer-aarch64.tar.gz	https://github.com/xtool-org/OpenAppleMacros/releases/download/v1.4.1/OpenAppleMacrosServer-aarch64.tar.gz	c57bfabd6236b499998ec9c1f9e4017b014d925253fbc4aec20321a3f78c3f66
