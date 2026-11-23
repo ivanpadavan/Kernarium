@@ -55,8 +55,12 @@ def build(archive: Path, output: Path, repo: Path):
     aot.mkdir()
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        # TemporaryDirectory is private (0700); its root becomes the guest's
+        # mount root, which every guest user must be able to traverse.
+        root.chmod(0o755)
         node = root / 'bin/node'
         node.parent.mkdir()
+        node.parent.chmod(0o755)
         with tarfile.open(archive) as source:
             for member, destination in ((f'node-v{VERSION}-linux-arm64/bin/node', node),
                                         (f'node-v{VERSION}-linux-arm64/LICENSE', root / 'LICENSE')):
@@ -65,13 +69,15 @@ def build(archive: Path, output: Path, repo: Path):
                     raise ValueError(f"Not a regular archive member: {member}")
                 with source.extractfile(entry) as stream, destination.open('wb') as target:
                     shutil.copyfileobj(stream, target)
+                destination.chmod(0o644)
         node.chmod(0o755)
         identity = dict(version=VERSION, archive_sha256=ARCHIVE_SHA256,
                         node_sha256=artifact.sha256_file(node))
         identity_bytes = encoded(identity)
         (root / 'identity.json').write_bytes(identity_bytes)
+        (root / 'identity.json').chmod(0o644)
         capsule = output / 'node.erofs'
-        subprocess.run(['mkfs.erofs', str(capsule), str(root)], check=True, timeout=300)
+        subprocess.run(['mkfs.erofs', '--all-root', str(capsule), str(root)], check=True, timeout=300)
         release = dict(release_id='linux-node-' + VERSION + '-' + identity['node_sha256'][:12],
                        release_manifest_sha256=hashlib.sha256(identity_bytes).hexdigest(),
                        system_partition_sha256=artifact.sha256_file(capsule))
