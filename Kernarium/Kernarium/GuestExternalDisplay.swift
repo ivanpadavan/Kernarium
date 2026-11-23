@@ -126,8 +126,7 @@ final class GuestExternalDisplay: ObservableObject {
 @MainActor
 final class GuestExternalVideoView: UIView {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
-    private let synchronizer = AVSampleBufferRenderSynchronizer()
-    private var receiver: AVSampleBufferVideoRenderer.Receiver?
+    private var feed: (any GuestVideoFeed)?
     private var format: CMVideoFormatDescription?
     private(set) var frameSize = CGSize.zero
     private(set) var framesShown = 0
@@ -137,10 +136,8 @@ final class GuestExternalVideoView: UIView {
         let layer = self.layer as! AVSampleBufferDisplayLayer
         layer.videoGravity = .resizeAspect
         layer.backgroundColor = UIColor.black.cgColor
-        receiver = synchronizer.sampleBufferReceiver(adding: layer.sampleBufferRenderer)
-        synchronizer.delaysRateChangeUntilHasSufficientMediaData = false
-        let now = CMClockGetTime(CMClockGetHostTimeClock())
-        synchronizer.setRate(1, time: now, atHostTime: now)
+        feed = makeGuestVideoFeed(layer: layer)
+        feed?.prepare()
     }
 
     @available(*, unavailable)
@@ -155,20 +152,14 @@ final class GuestExternalVideoView: UIView {
             format = description
             frameSize = size
         }
-        guard let format, let receiver else { return }
+        guard let format, let feed else { return }
         var timing = CMSampleTimingInfo(duration: .invalid,
             presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()), decodeTimeStamp: .invalid)
         var sample: CMSampleBuffer?
         guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer,
             formatDescription: format, sampleTiming: &timing, sampleBufferOut: &sample) == noErr,
             let sample else { return }
-        let ready = CMReadySampleBuffer<CMSampleBuffer.DynamicContent>(unsafeBuffer: sample)
-        switch receiver.enqueueImmediately(ready) {
-        case .cancelledDueToFlushRequiredToResume, .cancelledDueToError:
-            receiver.flush()
-            _ = receiver.enqueueImmediately(ready)
-        default: break
-        }
+        feed.enqueue(sample)
         framesShown += 1
     }
 }
@@ -228,11 +219,14 @@ struct GuestExternalDisplayAnchor: UIViewControllerRepresentable {
 
 @MainActor
 final class GuestExternalAccessoryController: UIViewController {
-    private var registration: UISceneAccessoryRegistration?
+    // Retain the registration without requiring its iOS 27 type on iOS 26.
+    private var registration: AnyObject?
     override func viewDidLoad() {
         super.viewDidLoad()
-        let configuration = UISceneConfiguration(name: "Guest external display", sessionRole: .windowExternalDisplayNonInteractive)
-        configuration.delegateClass = GuestExternalSceneDelegate.self
-        registration = registerSceneAccessory(.externalNonInteractive(sceneConfiguration: configuration))
+        if #available(iOS 27.0, *) {
+            let configuration = UISceneConfiguration(name: "Guest external display", sessionRole: .windowExternalDisplayNonInteractive)
+            configuration.delegateClass = GuestExternalSceneDelegate.self
+            registration = registerSceneAccessory(.externalNonInteractive(sceneConfiguration: configuration))
+        }
     }
 }

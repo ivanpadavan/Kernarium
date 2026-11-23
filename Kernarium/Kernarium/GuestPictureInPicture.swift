@@ -59,9 +59,9 @@ final class FrameRelay: @unchecked Sendable {
     }
 }
 
-/// How frames reach the Picture in Picture layer.
+/// How frames reach a Picture in Picture or external display layer.
 @MainActor
-private protocol PictureInPictureFeed: AnyObject {
+protocol GuestVideoFeed: AnyObject {
     /// Called whenever the window is prepared, before it is created.
     func prepare()
     func enqueue(_ sample: CMSampleBuffer)
@@ -73,7 +73,7 @@ private protocol PictureInPictureFeed: AnyObject {
 /// show as it arrives, and a renderer that iOS failed is flushed before it
 /// takes the next frame.
 @MainActor
-private final class RendererFeed: PictureInPictureFeed {
+private final class RendererFeed: GuestVideoFeed {
     private let layer: AVSampleBufferDisplayLayer
 
     init(layer: AVSampleBufferDisplayLayer) {
@@ -119,7 +119,7 @@ private final class RendererFeed: PictureInPictureFeed {
 /// as it arrives, and each enqueue reports its outcome.
 @available(iOS 27.0, *)
 @MainActor
-private final class ReceiverFeed: PictureInPictureFeed {
+private final class ReceiverFeed: GuestVideoFeed {
     private let synchronizer = AVSampleBufferRenderSynchronizer()
     private let receiver: AVSampleBufferVideoRenderer.Receiver
 
@@ -157,6 +157,14 @@ private final class ReceiverFeed: PictureInPictureFeed {
         let receiver = receiver
         Task { await receiver.flush(removingDisplayedImage: true) }
     }
+}
+
+@MainActor
+func makeGuestVideoFeed(layer: AVSampleBufferDisplayLayer) -> any GuestVideoFeed {
+    if #available(iOS 27.0, *) {
+        return ReceiverFeed(layer: layer)
+    }
+    return RendererFeed(layer: layer)
 }
 
 private let runtimeFrameSink: kernarium_runtime_frame_sink = { context, buffer in
@@ -253,7 +261,7 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
     var wanted: () -> Bool = { false }
 
     let layer = AVSampleBufferDisplayLayer()
-    private var feed: (any PictureInPictureFeed)?
+    private var feed: (any GuestVideoFeed)?
     private var pictureInPicture: AVPictureInPictureController?
     private let frameSubscription = UUID()
     private var armedRate: UInt32?
@@ -310,11 +318,7 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
         guard pictureInPicture == nil else { return }
         configureAudioSession()
         if feed == nil {
-            if #available(iOS 27.0, *) {
-                feed = ReceiverFeed(layer: layer)
-            } else {
-                feed = RendererFeed(layer: layer)
-            }
+            feed = makeGuestVideoFeed(layer: layer)
         }
         feed?.prepare()
         let source = AVPictureInPictureController.ContentSource(
@@ -370,8 +374,8 @@ final class GuestPictureInPicture: NSObject, PictureInPictureWindow {
         if armedRate == rate.framesPerSecond { return }
         let result = GuestFrameStream.shared.subscribe(id: frameSubscription,
             width: rate.width, fps: rate.framesPerSecond) { [weak self] buffer in self?.show(buffer) }
-        if result == 0 { armedRate = rate.framesPerSecond }
         if result == 0 {
+            armedRate = rate.framesPerSecond
             print(
                 "Kernarium: picture in picture mirror \(rate.width) px, " +
                     "\(rate.framesPerSecond) fps"

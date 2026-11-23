@@ -90,13 +90,15 @@ struct FrameRelayTests {
         var sink: kernarium_runtime_frame_sink?
         var context: UnsafeMutableRawPointer?
         var lettingGo = 0
+        var widths: [UInt32] = []
 
         func register(
-            _ sink: kernarium_runtime_frame_sink?, _ context: UnsafeMutableRawPointer?, _: UInt32, _: UInt32
+            _ sink: kernarium_runtime_frame_sink?, _ context: UnsafeMutableRawPointer?, width: UInt32, _: UInt32
         ) -> Int32 {
             if sink == nil { lettingGo += 1 }
             self.sink = sink
             self.context = context
+            if sink != nil { widths.append(width) }
             return 0
         }
 
@@ -104,6 +106,18 @@ struct FrameRelayTests {
         func deliver(_ frame: CVPixelBuffer) {
             if let sink, let context { sink(context, Unmanaged.passUnretained(frame).toOpaque()) }
         }
+    }
+
+    @Test
+    func aWiderConsumerChangesTheMirrorWithoutChangingItsFrameRate() {
+        let runtime = RuntimeStandIn()
+        let mirror = FrameMirror(
+            deliver: { _ in },
+            register: { runtime.register($0, $1, width: $2, $3) })
+        defer { mirror.disarm() }
+        #expect(mirror.arm(width: 480, framesPerSecond: 15) == 0)
+        #expect(mirror.arm(width: 1920, framesPerSecond: 15) == 0)
+        #expect(runtime.widths == [480, 1920])
     }
 
     /// A delivery that is still waiting for the main thread when the window disarms holds the relay
@@ -115,7 +129,7 @@ struct FrameRelayTests {
         var shown: [Int] = []
         let mirror = FrameMirror(
             deliver: { shown.append(CVPixelBufferGetWidth($0)) },
-            register: { runtime.register($0, $1, $2, $3) })
+            register: { runtime.register($0, $1, width: $2, $3) })
         #expect(mirror.arm(width: 64, framesPerSecond: 2) == 0)
         #expect(mirror.isHolding)
 

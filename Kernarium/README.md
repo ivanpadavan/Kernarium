@@ -191,8 +191,9 @@ Android kernel is built.
 
 The fork's Xcode target embeds Linux alone. Package it with
 `Kernarium/scripts/package-ios-frameworks.sh --sdk device --runtimes linux`.
-Current upstream requires iOS 27 and Metal 4; CI uses the `xcode-27` ARM64
-macOS 27 image. The downloaded IPA is unsigned for signing in SideStore.
+The application and runtime target iOS 26; device graphics require Metal 4.
+CI uses the `xcode-27` ARM64 macOS 27 image. The downloaded IPA is unsigned
+for signing in SideStore.
 Unzip `debian-13-phosh.img.zip` in Files and put `debian-13-phosh.img` in the app's
 Documents directory using Files. Reuse the disk to keep installed packages,
 repositories and user files. The desktop and the serial console log in as
