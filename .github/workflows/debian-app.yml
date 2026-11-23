@@ -76,7 +76,6 @@ jobs:
       image_key: ${{ steps.node-key.outputs.key }}
     env:
       GH_TOKEN: ${{ github.token }}
-      NODE_EXPERIMENT_ROOT: ${{ runner.temp }}/node-experiment
     steps:
     - uses: actions/checkout@v4
       with:
@@ -94,6 +93,7 @@ jobs:
     - name: Fingerprint the complete Node producer inputs
       id: node-key
       run: |
+        echo "NODE_EXPERIMENT_ROOT=$RUNNER_TEMP/node-experiment" >> "$GITHUB_ENV"
         echo "key=$(python3 -B tools/ci/node-experiment.py key)" >> "$GITHUB_OUTPUT"
     - name: Reuse a matching verified AOT and image pair from another run
       id: reuse
