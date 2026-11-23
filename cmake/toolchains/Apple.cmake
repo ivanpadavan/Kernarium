@@ -27,6 +27,21 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
     COMMAND_ERROR_IS_FATAL ANY)
 set(CMAKE_OSX_SYSROOT "${_uml_apple_sdk_path}" CACHE PATH "Apple SDK" FORCE)
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    if(NOT DEFINED ENV{KERNARIUM_XTOOL_SDK})
+        message(FATAL_ERROR "Linux Apple builds require the prepared xtool SDK")
+    endif()
+    if(UML_APPLE_PLATFORM STREQUAL "macos")
+        message(FATAL_ERROR "The xtool experiment supports iOS targets only")
+    endif()
+    set(_uml_cross_target arm64-apple-ios26.0)
+    if(UML_APPLE_PLATFORM STREQUAL "ios-simulator")
+        string(APPEND _uml_cross_target -simulator)
+    endif()
+    set(CMAKE_C_COMPILER_TARGET "${_uml_cross_target}")
+    set(CMAKE_CXX_COMPILER_TARGET "${_uml_cross_target}")
+    set(CMAKE_OBJCXX_COMPILER_TARGET "${_uml_cross_target}")
+endif()
 # The platform's floor is its only target. A tree configured at another floor
 # keeps that target in its cache, and a preset does not reset it, so any other
 # value is refused instead of building at it. An unset or empty target takes

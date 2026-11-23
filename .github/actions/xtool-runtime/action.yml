@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Linux xtool runtime
+description: Cross-build the Linux guest's iOS runtime using verified prebuilt dependencies.
+runs:
+  using: composite
+  steps:
+  - name: Install Linux build tools
+    shell: bash
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y --no-install-recommends cmake ninja-build llvm-18 llvm-18-tools rsync libarchive-tools libfuse2t64
+  - name: Import the pinned official Swift signing keys
+    shell: bash
+    run: |
+      dependencies/prepare.sh --archive-manifest tools/ci/xtool/swift-keys.tsv
+      KEY_SHA=$(awk -F '\t' '$1 == "swift-signing-keys.asc" {print $3}' tools/ci/xtool/swift-keys.tsv)
+      test -n "$KEY_SHA"
+      gpg --batch --import ".build/dependency-cache/archives/$KEY_SHA-swift-signing-keys.asc"
+  - uses: swift-actions/setup-swift@v3
+    with:
+      swift-version: '6.4.2'
+  - name: Install the pinned xtool and offline SDK tools
+    shell: bash
+    run: bash tools/ci/xtool/setup-linux.sh
+  - uses: actions/cache/restore@v4
+    with:
+      path: .build/dependencies/apple-gpu-vulkan-experiment/ios-device-arm64
+      key: xtool-prebuilt-gpu-${{ github.sha }}
+      restore-keys: apple-gpu-v2-ios-ARM64-
+      fail-on-cache-miss: true
+  - uses: actions/cache/restore@v4
+    with:
+      path: .build/dependencies/ios-device-arm64/network
+      key: xtool-prebuilt-network-${{ github.sha }}
+      restore-keys: apple-network-v2-ios-ARM64-
+      fail-on-cache-miss: true
+  - uses: actions/cache/restore@v4
+    with:
+      path: .build/dependencies/ios-storage
+      key: xtool-prebuilt-storage-${{ github.sha }}
+      restore-keys: apple-storage-v2-ARM64-
+      fail-on-cache-miss: true
+  - uses: actions/cache/restore@v4
+    with:
+      path: .build/dependencies/ios-zstd
+      key: xtool-prebuilt-compression-${{ github.sha }}
+      restore-keys: apple-compression-v2-ARM64-
+      fail-on-cache-miss: true
+  - name: Verify the dependency prefixes and cross-build the runtime with AOT
+    shell: bash
+    run: |
+      sh tools/ci/build-apple-runtime.sh device

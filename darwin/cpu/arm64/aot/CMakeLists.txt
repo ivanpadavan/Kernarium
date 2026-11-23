@@ -314,11 +314,13 @@ set_target_properties(uml_arm64_aot_framework PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${_uml_aot_fw_dir}"
     BUILD_WITH_INSTALL_NAME_DIR TRUE
     INSTALL_NAME_DIR "@rpath/UmlArm64Aot.framework")
-add_custom_command(TARGET uml_arm64_aot_framework POST_BUILD
-    COMMAND /usr/bin/codesign --force --sign -
-        "${_uml_aot_fw_dir}"
-    COMMENT "Code-signing UmlArm64Aot.framework"
-    VERBATIM)
+if(CMAKE_HOST_APPLE)
+    add_custom_command(TARGET uml_arm64_aot_framework POST_BUILD
+        COMMAND /usr/bin/codesign --force --sign -
+            "${_uml_aot_fw_dir}"
+        COMMENT "Code-signing UmlArm64Aot.framework"
+        VERBATIM)
+endif()
 
 set_property(GLOBAL PROPERTY UML_AOT_FRAMEWORK_DIR "${_uml_aot_fw_dir}")
 set_property(GLOBAL PROPERTY UML_AOT_FRAMEWORK_TARGET

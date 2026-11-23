@@ -81,7 +81,7 @@ linking_framework()
 		[ -d "$candidate" ] || continue
 		candidate_name=$(basename -- "$candidate" .framework)
 		[ "$candidate_name" != "$NAME" ] && [ -f "$candidate/$candidate_name" ] || continue
-		if /usr/bin/otool -L "$candidate/$candidate_name" 2>/dev/null |
+		if otool -L "$candidate/$candidate_name" 2>/dev/null |
 			LC_ALL=C grep -Fq "@rpath/$NAME.framework/$NAME"; then
 			printf '%s\n' "$candidate_name"
 			return 0
