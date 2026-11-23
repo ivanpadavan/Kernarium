@@ -673,7 +673,7 @@ The fixed Linux Node experiment uses a separate capsule artifact and the same
 page-verifying executor. Its Linux runtime states the compiled capsule identity,
 and its Phosh image mounts Node's EROFS capsule before login. It does not consume
 Android release artifacts. The producer, selection and acceptance contract is in
-[`tools/aot`](../tools/aot/README.md#fixed-linux-node-experiment). The release
+[`tools/aot`](../tools/aot/README.md). The release
 rules below describe the Android component.
 
 The Android image's own arm64 libraries (`tools/aot/libraries.txt`) and the
