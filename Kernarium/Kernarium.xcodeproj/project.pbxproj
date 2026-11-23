@@ -392,7 +392,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"$SRCROOT/scripts/embed-device-framework.sh\" \"$SRCROOT/../.build/kernarium-xcframeworks/KosmicKrisp.xcframework\"\n";
+			shellScript = "\"$SRCROOT/scripts/embed-device-framework.sh\" \"$SRCROOT/../.build/kernarium-xcframeworks/KosmicKrisp.xcframework\"\n\"$SRCROOT/scripts/embed-device-framework.sh\" --optional \"$SRCROOT/../.build/kernarium-xcframeworks/UmlArm64Aot.xcframework\"\n";
 		};
 		A10000000000000000000041 /* Check Mac run location */ = {
 			isa = PBXShellScriptBuildPhase;

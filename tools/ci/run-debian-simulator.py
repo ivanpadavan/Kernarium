@@ -130,6 +130,7 @@ def main():
     parser.add_argument('--image', type=Path)
     parser.add_argument('--kind', default='phosh')
     parser.add_argument('--suite', default='DebianImageTests')
+    parser.add_argument('--aot-off', action='store_true')
     parser.add_argument('--features', action='store_true')
     parser.add_argument('--storage', action='store_true')
     parser.add_argument('--single-phase', action='store_true')
@@ -218,8 +219,11 @@ def main():
                 before = image.stat()
                 target = ((before.st_size // (1024**3)) + 2) * (1024**3)
             environment = {
+                'KERNARIUM_NODE_SMOKE': '1' if args.suite == 'DebianNodeTests' else '0',
+                'KERNARIUM_JIT': '0' if args.suite == 'DebianNodeTests' else os.environ.get('KERNARIUM_JIT', '1'),
+                'DARWIN_UML_AOT': '0' if args.aot_off else '1',
                 'KERNARIUM_ROOTFS': args.image.name if args.image else 'unit-tests-no-guest.img',
-                'KERNARIUM_LINUX_CONSOLE_BOOT': '0' if phase == 'write' and args.kind == 'phosh' and not args.storage else '1',
+                'KERNARIUM_LINUX_CONSOLE_BOOT': '0' if phase == 'write' and args.kind == 'phosh' and not args.storage and args.suite != 'DebianNodeTests' else '1',
                 'KERNARIUM_IMAGE_SMOKE': '1' if args.suite == 'DebianImageTests' else '0',
                 'KERNARIUM_IMAGE_KIND': args.kind,
                 'KERNARIUM_IMAGE_PHASE': phase,
@@ -280,6 +284,9 @@ def main():
                 assert counts['totalTestCount'] == 5, counts
             elif args.suite == 'GuestJITTests':
                 assert counts['totalTestCount'] == 3, counts
+            if args.suite == 'DebianNodeTests':
+                activated = 'Kernarium: Linux Node AOT executed' in log_path.read_text(errors='replace')
+                assert activated != args.aot_off, 'Node AOT activation did not match the selected arm'
             # XCTest can migrate the application's data directory while
             # installing its test host. Refresh the path, keeping that disk's
             # contents, before inspecting it or starting the next phase.

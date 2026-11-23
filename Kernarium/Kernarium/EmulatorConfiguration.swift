@@ -118,7 +118,12 @@ struct EmulatorConfiguration: Equatable {
     var autoResizeGuest: Bool
     var androidBootMode: AndroidBootMode
     var linuxGraphicalBoot = true
-    var jitEnabled = true
+    #if KERNARIUM_NODE_AOT
+    static let defaultJITEnabled = false
+    #else
+    static let defaultJITEnabled = true
+    #endif
+    var jitEnabled = Self.defaultJITEnabled
     var gpuBudgetApplicationMiB = defaultGPUBudgetApplicationMiB
     var gpuBudgetEngineMiB = defaultGPUBudgetEngineMiB
     var gpuBudgetHeadroomMiB = defaultGPUBudgetHeadroomMiB
@@ -322,7 +327,7 @@ struct EmulatorConfiguration: Equatable {
             androidBootMode: environmentAndroidBootMode ?? storedAndroidBootMode,
             linuxGraphicalBoot: environmentFlag("KERNARIUM_LINUX_CONSOLE_BOOT")
                 .map { !$0 } ?? stored(Key.linuxGraphicalBoot, true),
-            jitEnabled: environmentFlag("KERNARIUM_JIT") ?? stored(Key.jitEnabled, true),
+            jitEnabled: environmentFlag("KERNARIUM_JIT") ?? stored(Key.jitEnabled, Self.defaultJITEnabled),
             gpuBudgetApplicationMiB: gpuBudgetApplicationMiB,
             gpuBudgetEngineMiB: gpuBudgetEngineMiB,
             gpuBudgetHeadroomMiB: gpuBudgetHeadroomMiB

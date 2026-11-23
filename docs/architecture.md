@@ -669,6 +669,13 @@ each on its own condition.
 
 ### Ahead-of-time code
 
+The fixed Linux Node experiment uses a separate capsule artifact and the same
+page-verifying executor. Its Linux runtime states the compiled capsule identity,
+and its Phosh image mounts Node's EROFS capsule before login. It does not consume
+Android release artifacts. The producer, selection and acceptance contract is in
+[`tools/aot`](../tools/aot/README.md). The release
+rules below describe the Android component.
+
 The Android image's own arm64 libraries (`tools/aot/libraries.txt`) and the
 compiled Java of its boot image (every `boot*.oat` with code) are rewritten
 ahead of time by `tools/aot` into one blob, which the gadget engine runs as

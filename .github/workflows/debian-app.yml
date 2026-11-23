@@ -19,7 +19,7 @@ jobs:
         fetch-depth: 0
     - id: plan
       env:
-        BEFORE: ${{ github.event.before }}
+        BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
       run: |
         BEFORE=${BEFORE:-$(git rev-parse HEAD^)}
         python3 -B tools/ci/debian-inputs.py --before "$BEFORE" --output plan.json --github-output "$GITHUB_OUTPUT"
@@ -31,8 +31,64 @@ jobs:
       run: python3 -B tests/tooling/kernarium/test_debian_inputs.py -v
     - name: Verify guest display geometry and metadata policy
       run: python3 -B tests/tooling/kernarium/test_display_session.py -v
+    - name: Verify Node snapshot reuse boundaries and integrity
+      run: timeout 60 python3 -B tests/tooling/kernarium/test_node_experiment.py
+  node-image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    outputs:
+      image_key: ${{ steps.node-key.outputs.key }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Install the image producer tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends build-essential cpio curl debootstrap e2fsprogs erofs-utils gdisk gzip python3 sudo tar xz-utils zip
+    - name: Check the rewriter and executable windows
+      run: |
+        timeout 120 python3 -B tests/tooling/arm64/test_aot_tools.py
+        timeout 60 python3 -B tests/tooling/arm64/test_linux_node_aot.py
+        timeout 120 python3 -B tests/tooling/cmake/check_environment_portability.py --source-root .
+        timeout 120 python3 -B tests/tooling/cmake/check_license_headers.py --source-root .
+    - name: Fingerprint the complete Node producer inputs
+      id: node-key
+      run: |
+        echo "NODE_EXPERIMENT_ROOT=$RUNNER_TEMP/node-experiment" >> "$GITHUB_ENV"
+        echo "key=$(python3 -B tools/ci/node-experiment.py key)" >> "$GITHUB_OUTPUT"
+    - name: Reuse a matching verified AOT and image pair from another run
+      id: reuse
+      run: python3 -B tools/ci/node-experiment.py restore --root "$NODE_EXPERIMENT_ROOT" --github-output "$GITHUB_OUTPUT"
+    - name: Build the fixed Node AOT and Phosh image pair
+      if: steps.reuse.outputs.reused != 'true'
+      run: bash tools/ci/build-node-experiment.sh "$NODE_EXPERIMENT_ROOT" "${{ steps.node-key.outputs.key }}"
+    - uses: actions/upload-artifact@v4
+      id: aot-upload
+      with:
+        name: linux-node-aot
+        path: ${{ runner.temp }}/node-experiment/node/aot/
+        compression-level: 0
+    - uses: actions/upload-artifact@v4
+      id: image-upload
+      with:
+        name: node-phosh-image
+        path: ${{ runner.temp }}/node-experiment/image/
+        compression-level: 0
+    - name: Record reusable references to the original matching artifacts
+      if: steps.reuse.outputs.reused != 'true'
+      run: python3 -B tools/ci/node-experiment.py record --root "$NODE_EXPERIMENT_ROOT" --aot-artifact "${{ steps.aot-upload.outputs.artifact-id }}" --image-artifact "${{ steps.image-upload.outputs.artifact-id }}"
+    - uses: actions/upload-artifact@v4
+      if: steps.reuse.outputs.reused != 'true'
+      with:
+        name: node-experiment-${{ steps.node-key.outputs.key }}
+        path: ${{ runner.temp }}/node-experiment/reuse/
+        overwrite: true
+        if-no-files-found: error
   build:
-    needs: inputs
+    needs: [inputs, node-image]
     if: needs.inputs.outputs.app == 'true'
     strategy:
       fail-fast: false
@@ -56,6 +112,14 @@ jobs:
         fetch-depth: 0
     - name: Reuse accepted kernel and boot base with source and digest verification
       run: python3 -B tools/ci/stage-debian-runtime.py
+    - uses: actions/download-artifact@v4
+      with:
+        name: linux-node-aot
+        path: .build/linux-node-aot
+    - name: Select the fixed Node AOT artifact
+      run: |
+        echo "KERNARIUM_NODE_AOT_ARTIFACT=$PWD/.build/linux-node-aot" >> "$GITHUB_ENV"
+        echo "CI_NODE_AOT_SHA256=$(shasum -a 256 .build/linux-node-aot/artifact.json | awk '{print $1}')" >> "$GITHUB_ENV"
     - uses: ./.github/actions/apple-runtime
       with:
         sdk: ${{ matrix.sdk }}
@@ -67,7 +131,7 @@ jobs:
       run: |
         xcodebuild -project Kernarium/Kernarium.xcodeproj -scheme Kernarium -configuration Release \
           -destination 'generic/platform=iOS' -derivedDataPath "$PWD/.build/iphone-derived" -jobs 3 \
-          CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS=KERNARIUM_NODE_AOT CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
         mkdir -p .build/ipa/Payload
         cp -R .build/iphone-derived/Build/Products/Release-iphoneos/Kernarium.app .build/ipa/Payload/
         (cd .build/ipa && zip -qry "$RUNNER_TEMP/Kernarium-Debian.ipa" Payload)
@@ -110,7 +174,7 @@ jobs:
         path: apple-cache-*.json
         if-no-files-found: warn
   tests:
-    needs: [inputs, build]
+    needs: [inputs, build, node-image]
     runs-on: xcode-27
     timeout-minutes: 90
     env:
@@ -142,9 +206,23 @@ jobs:
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
         python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --ui-case KernariumUITests/testGraphicalModifiersAreReleasedWhenChangingModes --output "$RUNNER_TEMP/ui-results"
-    - name: Fetch a previously boot-qualified Phosh disk without building any image
+    - uses: actions/download-artifact@v4
+      with:
+        name: node-phosh-image
+        path: ${{ runner.temp }}/node-image
+    - name: Verify the matching Node experiment disk
       id: golden
-      run: python3 -B tools/ci/qualified-debian-image.py --input-key '${{ needs.inputs.outputs.phosh_key }}' --wait-seconds 1800 --output "$RUNNER_TEMP/golden-image"
+      run: |
+        python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/node-image" --kind debian-phosh --key "${{ needs.node-image.outputs.image_key }}"
+        mkdir -p "$RUNNER_TEMP/golden-image"
+        unzip -q "$RUNNER_TEMP/node-image/debian-13-phosh.img.zip" -d "$RUNNER_TEMP/golden-image"
+        cp "$RUNNER_TEMP/node-image/provenance.json" "$RUNNER_TEMP/golden-image/selected-image.json"
+    - name: Run preinstalled Node and JavaScript with and without our AOT
+      run: |
+        rm -f .build/test-host/Products/selected.xctestrun
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianNodeTests --single-phase --output "$RUNNER_TEMP/node-on-results"
+        rm -f .build/test-host/Products/selected.xctestrun
+        python3 -B tools/ci/run-debian-simulator.py --state "$RUNNER_TEMP/simulator-state.json" --products .build/test-host/Products --image "$RUNNER_TEMP/golden-image/debian-13-phosh.img" --suite DebianNodeTests --single-phase --aot-off --output "$RUNNER_TEMP/node-off-results"
     - name: Resize the real Phosh desktop and restore the phone without reboot
       run: |
         rm -f .build/test-host/Products/selected.xctestrun
@@ -184,8 +262,8 @@ jobs:
         import json, os
         from pathlib import Path
         root=Path(os.environ['RUNNER_TEMP'])
-        tests={str(path.relative_to(root)):json.loads(path.read_text()) for folder in ('app-results','jit-results','ui-results','persistent-results','mobile-results','storage-results','display-native-results','display-results') for path in (root/folder).glob('*-summary.json')}
-        assert len(tests)==11, tests
+        tests={str(path.relative_to(root)):json.loads(path.read_text()) for folder in ('app-results','jit-results','ui-results','persistent-results','mobile-results','storage-results','display-native-results','display-results','node-on-results','node-off-results') for path in (root/folder).glob('*-summary.json')}
+        assert len(tests)==13, tests
         for summary in tests.values():
             assert summary['totalTestCount']>0 and summary['passedTests']==summary['totalTestCount']
             assert summary['failedTests']==summary['skippedTests']==0
@@ -207,6 +285,8 @@ jobs:
           ${{ runner.temp }}/mobile-results/
           ${{ runner.temp }}/storage-results/
 
+          ${{ runner.temp }}/node-on-results/
+          ${{ runner.temp }}/node-off-results/
           ${{ runner.temp }}/jit-results/
           ${{ runner.temp }}/display-native-results/
           ${{ runner.temp }}/display-results/
@@ -289,4 +369,7 @@ jobs:
   push:
     branches:
     - debian-phosh
+  pull_request:
+    branches:
+    - debian-phosh-upstream-20261123
   workflow_dispatch: null

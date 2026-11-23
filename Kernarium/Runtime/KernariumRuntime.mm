@@ -2069,6 +2069,11 @@ private:
             arguments.emplace_back("ubd0=" + request_.rootfsPath);
         else if (request_.derivativeRootfs)
             arguments.emplace_back("ubd0cr=" + request_.rootfsPath);
+#ifdef UML_LINUX_NODE_AOT_RELEASE
+        // This build contains only the fixed Node capsule's AOT code. Every
+        // entry still verifies the immutable guest page against its SHA-256.
+        arguments.emplace_back(UML_LINUX_NODE_AOT_RELEASE);
+#endif
         arguments.emplace_back("systemd.unit=" + request_.systemdUnit);
         arguments.emplace_back("plymouth.enable=0");
 #endif

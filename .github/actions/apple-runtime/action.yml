@@ -145,7 +145,7 @@ runs:
     shell: bash
     run: |
       RUNTIME_SOURCE=$(python3 -B tools/ci/debian-inputs.py --component runtime)
-      KEY=$(printf '%s\n' "$RUNTIME_SOURCE" "${{ steps.keys.outputs.gpu }}" "${{ steps.keys.outputs.network }}" "${{ steps.keys.outputs.storage }}" "${{ steps.keys.outputs.compression }}" "$CI_KERNEL_SHA256" "$CI_BOOT_BASE_SHA256" "${{ inputs.platform }}" | shasum -a 256 | awk '{print $1}')
+      KEY=$(printf '%s\n' "$RUNTIME_SOURCE" "${{ steps.keys.outputs.gpu }}" "${{ steps.keys.outputs.network }}" "${{ steps.keys.outputs.storage }}" "${{ steps.keys.outputs.compression }}" "$CI_KERNEL_SHA256" "$CI_BOOT_BASE_SHA256" "${CI_NODE_AOT_SHA256:-}" "${{ inputs.platform }}" | shasum -a 256 | awk '{print $1}')
       echo "key=$KEY" >> "$GITHUB_OUTPUT"
   - uses: actions/cache/restore@v4
     id: runtime-cache
@@ -161,6 +161,13 @@ runs:
   - name: Verify packaged runtime hashes and provenance
     shell: bash
     run: python3 -B tools/ci/debian-artifacts.py verify --root .build/kernarium-xcframeworks --kind apple-runtime --key "${{ steps.runtime-key.outputs.key }}"
+  - name: Verify the final packaged AOT code signature
+    if: env.KERNARIUM_NODE_AOT_ARTIFACT != ''
+    shell: bash
+    run: |
+      for framework in .build/kernarium-xcframeworks/UmlArm64Aot.xcframework/*/UmlArm64Aot.framework; do
+        codesign --verify --strict "$framework"
+      done
   - uses: actions/cache/save@v4
     if: steps.runtime-cache.outputs.cache-hit != 'true'
     with:

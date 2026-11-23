@@ -42,6 +42,7 @@ GROUPS = {
     'app-tests': ['Kernarium/KernariumTests/**', 'Kernarium/KernariumUITests/**'],
     'jit-ci': ['tools/ci/jit-unit-deps.py'],
     'app-ci': ['.github/workflows/debian-app.yml', '.github/actions/apple-runtime/**',
+               'tools/ci/node-experiment.py', 'tools/ci/build-node-experiment.sh',
                'tools/ci/apple-product-key.py', 'tools/ci/debian-artifacts.py',
                'tools/ci/stage-debian-runtime.py', 'tools/ci/qualified-debian-image.py',
                'tools/ci/actions_artifact.py', 'tools/ci/fetch-debian-app.py',

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <span>
@@ -2213,6 +2214,14 @@ EnterResult enter(CpuState &cpu, ::uml::memory::Tlb &tlb, const Hit &hit,
 	const auto result = function(&cpu, &tlb, hit.bias, hit.native, budget,
 		&table, hit.pages);
 	UML_AOT_COUNT(retired, result.retired);
+#if UML_LINUX_NODE_AOT
+	/* Report activation only after rewritten instructions actually retired.
+	 * This artifact contains Node text and no other guest code. */
+	static std::atomic_bool announced{false};
+	if (result.retired != 0 && !announced.load(std::memory_order_relaxed) &&
+	    !announced.exchange(true, std::memory_order_relaxed))
+		std::fputs("Kernarium: Linux Node AOT executed\n", stderr);
+#endif
 #if UML_AOT_DIAGNOSTICS
 	{
 		auto seen = counters::max_retired.load(std::memory_order_relaxed);

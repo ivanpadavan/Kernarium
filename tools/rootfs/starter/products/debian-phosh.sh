@@ -13,7 +13,7 @@ build_debian_phosh()
 		gnome-session-bin gnome-session-common gnome-settings-daemon \
 		gnome-settings-daemon-common squeekboard \
 		libgl1-mesa-dri libegl-mesa0 sudo openssh-server procps wl-clipboard gnome-console \
-		libglib2.0-bin dconf-cli at-spi2-core polkitd librsvg2-common wlr-randr
+		libglib2.0-bin dconf-cli at-spi2-core polkitd librsvg2-common wlr-randr mount libstdc++6
 	as_root test -x "$root/usr/bin/phosh-session"
 	as_root test -x "$root/usr/sbin/agreety"
 	as_root chroot "$root" useradd --create-home --uid 1000 --shell /bin/bash debian
@@ -25,6 +25,12 @@ build_debian_phosh()
 	done
 	configure_debian_base "$root" debian debian
 	configure_debian_local_console "$root" debian
+	if [ -n "${KERNARIUM_NODE_AOT_INPUT:-}" ]; then
+		as_root python3 -B "$SCRIPT_DIR/../../aot/linux_node.py" install \
+			--output "$KERNARIUM_NODE_AOT_INPUT" --root "$root"
+		as_root install -D -m 0644 "$SCRIPT_DIR/../../../tests/integration/linux/node_aot.js" \
+			"$root/usr/local/share/kernarium/node-aot-test.js"
+	fi
 	configure_phosh_session "$root"
 	write_root_file "$root/etc/sudoers.d/debian" 0440 <<'EOF'
 debian ALL=(ALL:ALL) NOPASSWD: ALL

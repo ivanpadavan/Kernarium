@@ -12,7 +12,7 @@
 #include <optional>
 #include <type_traits>
 
-/* Ahead-of-time native code for the Android image's own arm64 libraries
+/* Ahead-of-time native code for prebuilt arm64 guest libraries
  * (docs/architecture.md, "Ahead-of-time code"). The framework holds one
  * generated blob (tools/aot/rewrite.py): the entry routine, one unit of
  * rewritten code per library with its entry table and page digests. This
