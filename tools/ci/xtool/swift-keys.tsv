@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name	url	sha256
+swift-signing-keys.asc	https://www.swift.org/keys/all-keys.asc	67abcc2cff49a9dd4536b12bc4a7c2b82c434ddaa42b90516c9734f4dd5481af

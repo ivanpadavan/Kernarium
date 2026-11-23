@@ -9,6 +9,13 @@ runs:
     run: |
       sudo apt-get update
       sudo apt-get install -y --no-install-recommends cmake ninja-build llvm-18 llvm-18-tools rsync libarchive-tools libfuse2t64
+  - name: Import the pinned official Swift signing keys
+    shell: bash
+    run: |
+      dependencies/prepare.sh --archive-manifest tools/ci/xtool/swift-keys.tsv
+      KEY_SHA=$(awk -F '\t' '$1 == "swift-signing-keys.asc" {print $3}' tools/ci/xtool/swift-keys.tsv)
+      test -n "$KEY_SHA"
+      gpg --batch --import ".build/dependency-cache/archives/$KEY_SHA-swift-signing-keys.asc"
   - uses: swift-actions/setup-swift@v3
     with:
       swift-version: '6.4.0'
