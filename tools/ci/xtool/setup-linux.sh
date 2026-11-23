@@ -21,7 +21,7 @@ PY
 }
 cp "$(archive xtool-aarch64.AppImage)" "$TOOLS/xtool.AppImage"
 chmod +x "$TOOLS/xtool.AppImage"
-(cd "$TOOLS" && ./xtool.AppImage --appimage-extract >/dev/null)
+(CDPATH= cd -- "$TOOLS" && ./xtool.AppImage --appimage-extract >/dev/null)
 ln -s "$TOOLS/squashfs-root/AppRun" "$TOOLS/bin/xtool"
 export XTL_TOOLSET_TARBALL
 export XTL_OAM_TARBALL
