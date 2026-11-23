@@ -8,6 +8,13 @@ uml_add_tooling_test(
     TIMEOUT 60)
 
 uml_add_tooling_test(
+    NAME kernarium-node-experiment-reuse
+    COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/tests/tooling/kernarium/test_node_experiment.py
+    LABELS kernarium;package
+    TIMEOUT 60)
+
+uml_add_tooling_test(
     NAME kernarium-display-session
     COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/tests/tooling/kernarium/test_display_session.py

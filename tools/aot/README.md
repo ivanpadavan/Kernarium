@@ -112,7 +112,10 @@ library states in the image.
 ## Fixed Linux Node experiment
 
 `linux_node.py` produces an EROFS capsule and a separate AOT artifact for the
-arm64 Node archive pinned by `linux-node-archives.tsv`. The capsule is mounted
+arm64 Node archive pinned by `linux-node-archives.tsv`. It carries Node, npm
+and npx from that archive. npm's global prefix defaults to the
+writable `/usr/local`; project installs and the per-user cache use their
+ordinary npm locations. The capsule is mounted
 read-only at `/opt/kernarium-node` in the Phosh disk; `node` starts that binary
 with V8's JIT disabled. The AOT artifact covers its executable segment in
 bounded windows, including embedded V8 interpreter builtins without unwind
@@ -126,7 +129,10 @@ The first entry that retires rewritten instructions reports activation once.
 The framework carries Node's bundled licence notices.
 
 The Debian IPA workflow produces the matching IMG and unsigned device IPA,
-and boots the Simulator with AOT enabled and disabled. Both runs require
+and reuses a verified AOT/IMG pair across runs while its producer inputs match.
+The reuse reference binds original artifact IDs to their producer run and source
+inputs; original provenance and complete payload hashes remain required.
+It boots the Simulator with AOT enabled and disabled. Both runs require
 `node --version` and the JavaScript workload to pass; only the enabled run may
 report AOT activation. This is a fixed-version experiment, not a performance
 claim or support for arbitrary Node updates.

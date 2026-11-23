@@ -32,6 +32,8 @@ jobs:
       run: python3 -B tests/tooling/kernarium/test_debian_inputs.py -v
     - name: Verify guest display geometry and metadata policy
       run: python3 -B tests/tooling/kernarium/test_display_session.py -v
+    - name: Verify Node snapshot reuse boundaries and integrity
+      run: timeout 60 python3 -B tests/tooling/kernarium/test_node_experiment.py
     - name: Check the xtool packaging adapter
       run: timeout 60 python3 -B tests/tooling/kernarium/test_xtool.py
     - uses: actions/cache/restore@v4
@@ -70,6 +72,11 @@ jobs:
   node-image:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 180
+    outputs:
+      image_key: ${{ steps.node-key.outputs.key }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_EXPERIMENT_ROOT: ${{ runner.temp }}/node-experiment
     steps:
     - uses: actions/checkout@v4
       with:
@@ -84,30 +91,38 @@ jobs:
         timeout 60 python3 -B tests/tooling/arm64/test_linux_node_aot.py
         timeout 120 python3 -B tests/tooling/cmake/check_environment_portability.py --source-root .
         timeout 120 python3 -B tests/tooling/cmake/check_license_headers.py --source-root .
-    - name: Prepare the pinned Node archive and produce our AOT artifact
+    - name: Fingerprint the complete Node producer inputs
+      id: node-key
       run: |
-        dependencies/prepare.sh --archive-manifest tools/aot/linux-node-archives.tsv
-        ARCHIVE=$(find .build/dependency-cache/archives -name '*-node-v22.16.0-linux-arm64.tar.xz')
-        test -n "$ARCHIVE"
-        timeout 7200 python3 -B tools/aot/linux_node.py build --archive "$ARCHIVE" --output "$RUNNER_TEMP/node"
-    - name: Build the Phosh disk with the matching preinstalled Node capsule
-      env:
-        KERNARIUM_NODE_AOT_INPUT: ${{ runner.temp }}/node
-      run: |
-        tools/rootfs/starter/build-all.sh --work "$RUNNER_TEMP/node-image-work" --output "$RUNNER_TEMP/node-image" --product debian-13-phosh
-        zip -9 -j "$RUNNER_TEMP/node-image/debian-13-phosh.img.zip" "$RUNNER_TEMP/node-image/debian-13-phosh.img"
-        rm "$RUNNER_TEMP/node-image/debian-13-phosh.img"
-        python3 -B tools/ci/debian-artifacts.py record --root "$RUNNER_TEMP/node-image" --kind debian-phosh --key "$GITHUB_SHA"
+        echo "key=$(python3 -B tools/ci/node-experiment.py key)" >> "$GITHUB_OUTPUT"
+    - name: Reuse a matching verified AOT and image pair from another run
+      id: reuse
+      run: python3 -B tools/ci/node-experiment.py restore --root "$NODE_EXPERIMENT_ROOT" --github-output "$GITHUB_OUTPUT"
+    - name: Build the fixed Node AOT and Phosh image pair
+      if: steps.reuse.outputs.reused != 'true'
+      run: bash tools/ci/build-node-experiment.sh "$NODE_EXPERIMENT_ROOT" "${{ steps.node-key.outputs.key }}"
     - uses: actions/upload-artifact@v4
+      id: aot-upload
       with:
         name: linux-node-aot
-        path: ${{ runner.temp }}/node/aot/
+        path: ${{ runner.temp }}/node-experiment/node/aot/
         compression-level: 0
     - uses: actions/upload-artifact@v4
+      id: image-upload
       with:
         name: node-phosh-image
-        path: ${{ runner.temp }}/node-image/
+        path: ${{ runner.temp }}/node-experiment/image/
         compression-level: 0
+    - name: Record reusable references to the original matching artifacts
+      if: steps.reuse.outputs.reused != 'true'
+      run: python3 -B tools/ci/node-experiment.py record --root "$NODE_EXPERIMENT_ROOT" --aot-artifact "${{ steps.aot-upload.outputs.artifact-id }}" --image-artifact "${{ steps.image-upload.outputs.artifact-id }}"
+    - uses: actions/upload-artifact@v4
+      if: steps.reuse.outputs.reused != 'true'
+      with:
+        name: node-experiment-${{ steps.node-key.outputs.key }}
+        path: ${{ runner.temp }}/node-experiment/reuse/
+        overwrite: true
+        if-no-files-found: error
   build-device:
     needs: [inputs, node-image, sdk]
     if: ${{ !cancelled() && needs.inputs.outputs.app == 'true' && needs.node-image.result == 'success' && (needs.sdk.result == 'success' || needs.sdk.result == 'skipped') }}
@@ -217,7 +232,7 @@ jobs:
         path: apple-cache-*.json
         if-no-files-found: warn
   tests:
-    needs: [inputs, build, build-device]
+    needs: [inputs, build, build-device, node-image]
     runs-on: xcode-27
     timeout-minutes: 90
     env:
@@ -256,7 +271,7 @@ jobs:
     - name: Verify the matching Node experiment disk
       id: golden
       run: |
-        python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/node-image" --kind debian-phosh --key "$GITHUB_SHA"
+        python3 -B tools/ci/debian-artifacts.py verify --root "$RUNNER_TEMP/node-image" --kind debian-phosh --key "${{ needs.node-image.outputs.image_key }}"
         mkdir -p "$RUNNER_TEMP/golden-image"
         unzip -q "$RUNNER_TEMP/node-image/debian-13-phosh.img.zip" -d "$RUNNER_TEMP/golden-image"
         cp "$RUNNER_TEMP/node-image/provenance.json" "$RUNNER_TEMP/golden-image/selected-image.json"

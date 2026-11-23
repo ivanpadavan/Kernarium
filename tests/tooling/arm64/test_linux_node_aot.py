@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Linux Node windows preserve instruction addresses and immutable file bytes."""
 import io
+import json
 import os
 from pathlib import Path
 import stat
@@ -36,18 +37,26 @@ class Windows(unittest.TestCase):
             scratch = Path(temporary)
             archive = scratch / 'node.tar.xz'
             with tarfile.open(archive, 'w:xz') as destination:
-                for relative in ('bin/node', 'LICENSE'):
+                for relative, content, mode in (
+                        ('bin/node', b'fixture', 0o755), ('LICENSE', b'fixture', 0o644),
+                        ('lib/node_modules/npm/package.json', json.dumps({'name': 'npm', 'version': '10.9.2'}).encode(), 0o644),
+                        ('lib/node_modules/npm/bin/npm-cli.js', b'fixture', 0o755),
+                        ('lib/node_modules/npm/lib/cli.js', b'fixture', 0o644)):
                     member = tarfile.TarInfo(f'node-v{linux_node.VERSION}-linux-arm64/{relative}')
-                    member.size = len(b'fixture')
-                    destination.addfile(member, io.BytesIO(b'fixture'))
+                    member.size = len(content)
+                    member.mode = mode
+                    destination.addfile(member, io.BytesIO(content))
 
             def inspect_payload(command, **kwargs):
                 root = Path(command[-1])
-                for relative in ('', 'bin', 'bin/node'):
+                for relative in ('', 'bin', 'bin/node', 'lib', 'lib/node_modules',
+                                 'lib/node_modules/npm', 'lib/node_modules/npm/bin/npm-cli.js'):
                     permissions = stat.S_IMODE((root / relative).stat().st_mode)
                     self.assertEqual(permissions, 0o755, relative)
-                for relative in ('LICENSE', 'identity.json'):
+                for relative in ('LICENSE', 'identity.json', 'lib/node_modules/npm/package.json',
+                                 'lib/node_modules/npm/lib/cli.js'):
                     self.assertEqual(stat.S_IMODE((root / relative).stat().st_mode), 0o644, relative)
+                self.assertEqual(json.loads((root / 'identity.json').read_text())['npm_version'], '10.9.2')
                 raise CapsuleChecked
 
             previous = os.umask(0o077)
