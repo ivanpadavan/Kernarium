@@ -184,7 +184,12 @@ jobs:
         echo "KERNARIUM_NODE_AOT_ARTIFACT=$PWD/.build/linux-node-aot" >> "$GITHUB_ENV"
         echo "CI_NODE_AOT_SHA256=$(shasum -a 256 .build/linux-node-aot/artifact.json | awk '{print $1}')" >> "$GITHUB_ENV"
     - name: Check framework embedding with the selected Apple tools
-      run: timeout 180 python3 -B tests/tooling/kernarium/test_device_framework_embed.py
+      run: |
+        python3 - <<'PY'
+        import subprocess
+        subprocess.run(['python3', '-B', 'tests/tooling/kernarium/test_device_framework_embed.py'],
+                       check=True, stdin=subprocess.DEVNULL, timeout=180)
+        PY
     - uses: ./.github/actions/apple-runtime
       with:
         sdk: ${{ matrix.sdk }}
