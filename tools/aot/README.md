@@ -129,7 +129,10 @@ The first entry that retires rewritten instructions reports activation once.
 The framework carries Node's bundled licence notices.
 
 The Debian IPA workflow produces the matching IMG and unsigned device IPA,
-and boots the Simulator with AOT enabled and disabled. Both runs require
+and reuses a verified AOT/IMG pair across runs while its producer inputs match.
+The reuse reference binds original artifact IDs to their producer run and source
+inputs; original provenance and complete payload hashes remain required.
+It boots the Simulator with AOT enabled and disabled. Both runs require
 `node --version` and the JavaScript workload to pass; only the enabled run may
 report AOT activation. This is a fixed-version experiment, not a performance
 claim or support for arbitrary Node updates.
