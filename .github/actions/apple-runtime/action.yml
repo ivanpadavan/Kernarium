@@ -161,6 +161,13 @@ runs:
   - name: Verify packaged runtime hashes and provenance
     shell: bash
     run: python3 -B tools/ci/debian-artifacts.py verify --root .build/kernarium-xcframeworks --kind apple-runtime --key "${{ steps.runtime-key.outputs.key }}"
+  - name: Verify the final packaged AOT code signature
+    if: env.KERNARIUM_NODE_AOT_ARTIFACT != ''
+    shell: bash
+    run: |
+      for framework in .build/kernarium-xcframeworks/UmlArm64Aot.xcframework/*/UmlArm64Aot.framework; do
+        codesign --verify --strict "$framework"
+      done
   - uses: actions/cache/save@v4
     if: steps.runtime-cache.outputs.cache-hit != 'true'
     with:
